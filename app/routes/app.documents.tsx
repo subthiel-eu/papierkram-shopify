@@ -45,6 +45,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       documentNo: link.documentNo,
       state: link.state,
       totalGross: link.totalGross,
+      currency: link.currency,
       url: link.url,
       papierkramId: link.papierkramId,
       updatedAt: link.updatedAt.toISOString(),
@@ -132,7 +133,7 @@ export default function Documents() {
                   </s-table-cell>
                   <s-table-cell>
                     {document.totalGross !== null
-                      ? `${document.totalGross.toFixed(2)} EUR`
+                      ? `${document.totalGross.toFixed(2)} ${document.currency ?? ""}`.trim()
                       : "-"}
                   </s-table-cell>
                   <s-table-cell>

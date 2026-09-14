@@ -23,6 +23,10 @@ import type {
  * getestet werden kann.
  */
 export interface MappingSettings {
+  /** Waehrung des Papierkram-Mandanten, z.B. "EUR". */
+  documentCurrency: string;
+  /** Bestellungen in abweichender Waehrung trotzdem uebertragen. */
+  allowForeignCurrency: boolean;
   /** "auto" folgt der Shopify-Einstellung, sonst erzwungen. */
   grossMode: "auto" | "gross" | "net";
   /** USt-Satz in Prozent (19 = 19 %), wenn Shopify keinen Satz liefert. */
@@ -40,6 +44,8 @@ export interface MappingSettings {
 }
 
 export const DEFAULT_MAPPING_SETTINGS: MappingSettings = {
+  documentCurrency: "EUR",
+  allowForeignCurrency: false,
   grossMode: "auto",
   defaultVatRate: 19,
   includeShipping: true,
@@ -289,6 +295,47 @@ export function mapCustomerToCompany(
   return input;
 }
 
+/**
+ * Die Papierkram-API nimmt je Beleg keine Waehrung entgegen - Betraege werden
+ * in der Waehrung des Mandanten verbucht. Eine Bestellung in einer anderen
+ * Waehrung wuerde also mit falschem Wert in der Buchhaltung landen, ohne dass
+ * es jemandem auffaellt.
+ */
+export class CurrencyMismatchError extends Error {
+  readonly orderCurrency: string;
+  readonly documentCurrency: string;
+
+  constructor(orderCurrency: string, documentCurrency: string) {
+    super(
+      `Die Bestellung ist in ${orderCurrency} ausgezeichnet, der Papierkram-Mandant rechnet in ${documentCurrency}. ` +
+        `Papierkram uebernimmt keine Waehrung je Beleg, die Betraege wuerden also als ${documentCurrency} verbucht. ` +
+        `Bitte die Belegwaehrung in den Einstellungen korrigieren oder Fremdwaehrungen dort ausdruecklich zulassen.`,
+    );
+    this.name = "CurrencyMismatchError";
+    this.orderCurrency = orderCurrency;
+    this.documentCurrency = documentCurrency;
+  }
+}
+
+/** Wirft, wenn Beleg- und Bestellwaehrung nicht zusammenpassen. */
+export function assertCurrency(
+  orderCurrency: string | null | undefined,
+  settings: Pick<MappingSettings, "documentCurrency" | "allowForeignCurrency">,
+  onWarning?: (message: string) => void,
+): void {
+  const order = (orderCurrency ?? "").trim().toUpperCase();
+  const document = settings.documentCurrency.trim().toUpperCase();
+  if (!order || order === document) return;
+
+  if (!settings.allowForeignCurrency) {
+    throw new CurrencyMismatchError(order, document);
+  }
+  onWarning?.(
+    `Die Bestellung ist in ${order} ausgezeichnet, der Beleg wird als ${document} gefuehrt. ` +
+      `Die Betraege wurden nicht umgerechnet.`,
+  );
+}
+
 export interface OrderMappingResult {
   invoice: Omit<InvoiceInput, "payment_term"> & {
     payment_term?: { id: number };
@@ -313,6 +360,8 @@ export function mapOrderToInvoice(args: {
 }): OrderMappingResult {
   const { order, settings } = args;
   const warnings: string[] = [];
+
+  assertCurrency(order.currencyCode, settings, (message) => warnings.push(message));
 
   const gross = resolveGross(settings, order.taxesIncluded);
   const targetBasis = gross ? "gross" : "net";
@@ -468,6 +517,8 @@ export function mapDraftOrderToEstimate(args: {
 }): DraftOrderMappingResult {
   const { draftOrder, settings } = args;
   const warnings: string[] = [];
+
+  assertCurrency(draftOrder.currencyCode, settings, (message) => warnings.push(message));
 
   const gross = resolveGross(settings, draftOrder.taxesIncluded);
   const targetBasis = gross ? "gross" : "net";

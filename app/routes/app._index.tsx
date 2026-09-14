@@ -70,6 +70,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       label: link.shopifyLabel,
       url: link.url,
       totalGross: link.totalGross,
+      currency: link.currency,
     })),
     logs: logs.map((entry) => ({
       id: entry.id,
@@ -160,6 +161,9 @@ export default function Dashboard() {
           {data.remainingQuota !== null ? (
             <s-text tone={data.remainingQuota < 500 ? "critical" : "neutral"}>
               Verbleibendes API-Kontingent diesen Monat: {data.remainingQuota}
+              {data.remainingQuota <= 25
+                ? " - aufgebraucht, Vorgaenge pausieren bis zum Zuruecksetzen."
+                : ""}
             </s-text>
           ) : null}
         </s-stack>
@@ -199,7 +203,7 @@ export default function Dashboard() {
                   </s-table-cell>
                   <s-table-cell>
                     {document.totalGross !== null
-                      ? `${document.totalGross.toFixed(2)} EUR`
+                      ? `${document.totalGross.toFixed(2)} ${document.currency ?? ""}`.trim()
                       : "-"}
                   </s-table-cell>
                 </s-table-row>

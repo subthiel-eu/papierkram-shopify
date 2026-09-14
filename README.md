@@ -62,6 +62,9 @@ API-Token eintragen → **Verbindung testen**.
 | `PAPIERKRAM_BASE_URL_TEMPLATE` | Optional, Standard `https://{subdomain}.papierkram.de`. |
 | `SYNC_WORKER_INTERVAL` | Optional, Sekunden zwischen zwei Worker-Läufen (Standard 15). |
 | `SYNC_WORKER_DISABLED` | Auf `true` setzen, wenn der Worker in einem separaten Prozess läuft. |
+| `SYNC_JOB_STALE_MINUTES` | Optional, nach wie vielen Minuten ein unterbrochener Vorgang neu aufgenommen wird (Standard 15). |
+| `PAPIERKRAM_QUOTA_FLOOR` | Optional, ab welchem Restkontingent pausiert wird (Standard 25). |
+| `ERROR_WEBHOOK_URL` | Optional, JSON-POST bei aufgegebenen Vorgängen und Webhook-Fehlern. |
 
 ## Geschäftsfälle und Auslöser
 
@@ -140,6 +143,42 @@ Buchhaltung verzeiht keine Rundungsfehler, deshalb hier die Regeln im Klartext:
 * **Kontrolle.** Nach dem Anlegen vergleicht die App die Papierkram-Summe mit der
   Shopify-Summe und protokolliert Abweichungen über 2 Cent.
 
+## Was die App im Betrieb abfängt
+
+Die Punkte, an denen eine Integration wie diese üblicherweise still kaputtgeht –
+und was hier dagegen steht:
+
+**Fremdwährung.** Papierkram nimmt je Beleg keine Währung entgegen; Beträge
+werden in der Währung des Mandanten verbucht. Eine Bestellung in CHF würde also
+als EUR in der Buchhaltung landen. Die App bricht deshalb ab, statt still
+Falsches zu buchen. Wer es trotzdem will, schaltet es in den Einstellungen
+ausdrücklich frei und bekommt eine Warnung am Beleg.
+
+**Rückkopplung über Metafelder.** Der Statusabgleich schreibt Metafelder,
+Shopify feuert daraufhin `orders/updated`, was den nächsten Abgleich auslösen
+würde. Die App merkt sich eine Prüfsumme der zuletzt geschriebenen Werte und
+schreibt nur bei echter Änderung.
+
+**Abgebrochene Vorgänge.** Stirbt der Prozess mitten in einem Job (Deploy,
+Neustart, OOM), bliebe er auf `running` stehen und der Beleg entstünde nie. Der
+Worker erkennt solche Jobs am Startzeitpunkt und nimmt sie wieder auf –
+bis das Versuchsbudget erschöpft ist, dann werden sie als gescheitert gemeldet.
+
+**Gleichzeitige Belegerzeugung.** Ein Webhook-Job und ein Klick in der
+Bestellung könnten beide durch die Prüfung laufen und zwei Belege anlegen. Die
+App reserviert die Verknüpfung über den Unique-Index, bevor sie Papierkram
+aufruft; der zweite Versuch prallt ab. Schlägt der Aufruf fehl, wird die
+Reservierung wieder freigegeben.
+
+**Shopify-Drosselung.** Die Admin-API drosselt kostenbasiert. `THROTTLED` und
+HTTP 429 werden mit wachsendem Abstand wiederholt. Entzogene Berechtigung
+(401/403) dagegen gilt sofort als endgültig – fünf Wiederholungen würden daran
+nichts ändern.
+
+**Erschöpftes Papierkram-Kontingent.** Statt jeden Job in fünf Fehlversuche
+laufen zu lassen, pausiert die Warteschlange sechs Stunden, ohne einen Versuch
+zu verbrauchen.
+
 ## Architektur
 
 ```
@@ -151,8 +190,8 @@ app/
   routes/          Admin-Oberfläche, Webhooks, API für die Extensions
 extensions/        Fünf Admin-UI-Extensions (Preact + Polaris Web Components)
 prisma/            Datenmodell und Migrationen
-tests/             Vitest: Mapping, Client, Regeln/Dispatcher (echtes
-                   SQLite), Verschlüsselung, Rundung
+tests/             Vitest: Mapping, Client, Regeln/Dispatcher, Belegerzeugung,
+                   Warteschlange (echtes SQLite), Drosselung, Verschlüsselung
 ```
 
 **Warum eine Warteschlange?** Shopify erwartet auf Webhooks binnen fünf Sekunden
@@ -247,6 +286,19 @@ npm run deploy       # App und Extensions veröffentlichen
 
 Die Datenbank ist standardmäßig SQLite. Für den Produktivbetrieb den `provider`
 in `prisma/schema.prisma` auf `postgresql` umstellen und `DATABASE_URL` setzen.
+Bei mehreren App-Instanzen den Worker in genau einem Prozess laufen lassen
+(`SYNC_WORKER_DISABLED=true` in den übrigen); das Greifen der Jobs ist zwar
+atomar, aber ein Worker je Instanz vervielfacht nur die Leerläufe.
+
+Jeder Push und Pull Request läuft durch `.github/workflows/ci.yml`: Typecheck
+für App und Extensions, Lint, Tests und Build.
+
+### Was noch offen ist
+
+* **Ein Lauf gegen einen echten Shop und Papierkram-Mandanten.** Das ist der
+  einzige Nachweis, den Tests hier nicht ersetzen können.
+* App-Store-Pflichtteile: Datenschutzerklärung, Support-URL, Screenshots und –
+  falls die App Geld kosten soll – die Billing-API.
 
 ## Lizenz
 

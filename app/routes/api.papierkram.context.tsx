@@ -42,7 +42,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return json({
     ...base,
     documents: links
-      .filter((link) => link.kind !== "company")
+      // Reservierungen sind noch keine Belege.
+      .filter((link) => link.kind !== "company" && link.papierkramId > 0)
       .map((link) => ({
         id: link.id,
         kind: link.kind,

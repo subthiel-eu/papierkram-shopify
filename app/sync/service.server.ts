@@ -2,8 +2,12 @@ import type { ShopSettings } from "@prisma/client";
 
 import { money } from "~/lib/money";
 import {
+  LinkInProgressError,
+  RESERVED_STATE,
   findLink,
   propositionMap,
+  releaseReservation,
+  reserveLink,
   upsertLink,
   type DocumentKind,
 } from "~/models/links.server";
@@ -25,7 +29,7 @@ import {
   mapDraftOrderToEstimate,
   mapOrderToInvoice,
 } from "./mapper";
-import { setMetafields } from "./metafields.server";
+import { metafieldsFingerprint, setMetafields } from "./metafields.server";
 import { CUSTOMER_QUERY, DRAFT_ORDER_QUERY, ORDER_QUERY } from "./queries";
 import type { Address, Customer, DraftOrder, Order } from "./shopify-types";
 
@@ -212,6 +216,10 @@ export async function createInvoiceForOrder(
   options: CreateInvoiceOptions = {},
 ): Promise<CreateInvoiceResult> {
   const existing = await findLink(context.shop, "invoice", orderGid);
+  if (existing?.state === RESERVED_STATE) {
+    // Eine andere Anfrage legt den Beleg gerade an.
+    throw new LinkInProgressError("invoice");
+  }
   if (existing && !options.force) {
     const invoice = await context.client.getInvoice(existing.papierkramId);
     await persistInvoiceLink(context, orderGid, invoice, existing.shopifyLabel);
@@ -257,10 +265,28 @@ export async function createInvoiceForOrder(
     payload.payment_term = { id: context.settings.paymentTermId };
   }
 
-  let invoice = await context.client.createInvoice({
-    ...payload,
-    payment_term: payload.payment_term,
-  });
+  if (!existing) {
+    // Ab hier ist der Platz belegt; ein paralleler Versuch scheitert sofort,
+    // statt einen zweiten Beleg in Papierkram anzulegen.
+    await reserveLink({
+      shop: context.shop,
+      kind: "invoice",
+      shopifyGid: orderGid,
+      shopifyLabel: order.name,
+    });
+  }
+
+  let invoice: Invoice;
+  try {
+    invoice = await context.client.createInvoice({
+      ...payload,
+      payment_term: payload.payment_term,
+    });
+  } catch (error) {
+    // Ohne Freigabe bliebe die Bestellung dauerhaft blockiert.
+    if (!existing) await releaseReservation(context.shop, "invoice", orderGid);
+    throw error;
+  }
 
   // Summenabgleich: Abweichungen deuten auf Steuer-/Rundungsfragen hin.
   const shopifyTotal = money(Number(order.totalPriceSet.shopMoney.amount));
@@ -310,7 +336,20 @@ async function persistInvoiceLink(
   invoice: Invoice,
   label?: string | null,
 ) {
+  const currency = context.settings.documentCurrency;
   const url = context.client.documentUrl("invoice", invoice.id);
+
+  const values = {
+    invoice_id: invoice.id,
+    invoice_no: invoice.invoice_no ?? `Entwurf #${invoice.id}`,
+    invoice_state: invoice.state,
+    invoice_url: url,
+    invoice_total: invoice.total_gross.toFixed(2),
+  };
+  const fingerprint = metafieldsFingerprint(values);
+  const previous = await findLink(context.shop, "invoice", orderGid);
+  const unchanged = previous?.metafieldsHash === fingerprint;
+
   await upsertLink({
     shop: context.shop,
     kind: "invoice",
@@ -320,18 +359,14 @@ async function persistInvoiceLink(
     documentNo: invoice.invoice_no,
     state: invoice.state,
     totalGross: invoice.total_gross,
+    currency,
     url,
+    metafieldsHash: fingerprint,
   });
 
-  if (!context.settings.writeMetafields) return;
+  if (!context.settings.writeMetafields || unchanged) return;
   try {
-    await setMetafields(context.admin, orderGid, {
-      invoice_id: invoice.id,
-      invoice_no: invoice.invoice_no ?? `Entwurf #${invoice.id}`,
-      invoice_state: invoice.state,
-      invoice_url: url,
-      invoice_total: invoice.total_gross.toFixed(2),
-    });
+    await setMetafields(context.admin, orderGid, values);
   } catch (error) {
     await logWarning(
       context.shop,
@@ -363,6 +398,9 @@ export async function createEstimateForDraftOrder(
   } = {},
 ): Promise<CreateEstimateResult> {
   const existing = await findLink(context.shop, "estimate", draftOrderGid);
+  if (existing?.state === RESERVED_STATE) {
+    throw new LinkInProgressError("estimate");
+  }
   if (existing && !options.force) {
     const estimate = await context.client.getEstimate(existing.papierkramId);
     await persistEstimateLink(context, draftOrderGid, estimate, existing.shopifyLabel);
@@ -398,7 +436,22 @@ export async function createEstimateForDraftOrder(
     propositions: await propositionMap(context.shop),
   });
 
-  let estimate = await context.client.createEstimate(payload);
+  if (!existing) {
+    await reserveLink({
+      shop: context.shop,
+      kind: "estimate",
+      shopifyGid: draftOrderGid,
+      shopifyLabel: draftOrder.name,
+    });
+  }
+
+  let estimate: Estimate;
+  try {
+    estimate = await context.client.createEstimate(payload);
+  } catch (error) {
+    if (!existing) await releaseReservation(context.shop, "estimate", draftOrderGid);
+    throw error;
+  }
 
   const delivery =
     options.deliver ??
@@ -437,6 +490,16 @@ async function persistEstimateLink(
   label?: string | null,
 ) {
   const url = context.client.documentUrl("estimate", estimate.id);
+
+  const values = {
+    estimate_id: estimate.id,
+    estimate_no: estimate.estimate_no ?? `Entwurf #${estimate.id}`,
+    estimate_url: url,
+  };
+  const fingerprint = metafieldsFingerprint(values);
+  const previous = await findLink(context.shop, "estimate", draftOrderGid);
+  const unchanged = previous?.metafieldsHash === fingerprint;
+
   await upsertLink({
     shop: context.shop,
     kind: "estimate",
@@ -446,16 +509,14 @@ async function persistEstimateLink(
     documentNo: estimate.estimate_no,
     state: estimate.state,
     totalGross: estimate.total_gross,
+    currency: context.settings.documentCurrency,
     url,
+    metafieldsHash: fingerprint,
   });
 
-  if (!context.settings.writeMetafields) return;
+  if (!context.settings.writeMetafields || unchanged) return;
   try {
-    await setMetafields(context.admin, draftOrderGid, {
-      estimate_id: estimate.id,
-      estimate_no: estimate.estimate_no ?? `Entwurf #${estimate.id}`,
-      estimate_url: url,
-    });
+    await setMetafields(context.admin, draftOrderGid, values);
   } catch (error) {
     await logWarning(
       context.shop,
@@ -567,6 +628,8 @@ export async function refreshDocument(
 ): Promise<Invoice | Estimate | null> {
   const link = await findLink(context.shop, kind, shopifyGid);
   if (!link) return null;
+  // Eine Reservierung hat noch keinen Beleg, den man abfragen koennte.
+  if (link.state === RESERVED_STATE || link.papierkramId === 0) return null;
 
   try {
     if (kind === "invoice") {

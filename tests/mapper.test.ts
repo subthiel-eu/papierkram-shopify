@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CurrencyMismatchError,
   DEFAULT_MAPPING_SETTINGS,
+  assertCurrency,
   buildLineItem,
   estimateDocumentTotals,
   mapCustomerToCompany,
@@ -372,5 +374,51 @@ describe("Kontakte", () => {
       defaultAddress: { ...address, company: null, firstName: null, lastName: null },
     };
     expect(mapCustomerToCompany(anonymous, { fallbackToPersonName: true })).toBeNull();
+  });
+});
+
+describe("Waehrungspruefung", () => {
+  it("laesst die Bestellung durch, wenn die Waehrung passt", () => {
+    expect(() =>
+      assertCurrency("EUR", { documentCurrency: "EUR", allowForeignCurrency: false }),
+    ).not.toThrow();
+  });
+
+  it("ignoriert Gross- und Kleinschreibung sowie Leerzeichen", () => {
+    expect(() =>
+      assertCurrency(" eur ", { documentCurrency: "EUR", allowForeignCurrency: false }),
+    ).not.toThrow();
+  });
+
+  it("verweigert Fremdwaehrungen", () => {
+    expect(() =>
+      assertCurrency("CHF", { documentCurrency: "EUR", allowForeignCurrency: false }),
+    ).toThrow(CurrencyMismatchError);
+  });
+
+  it("laesst Fremdwaehrungen nur nach ausdruecklicher Freigabe zu und warnt", () => {
+    const warnings: string[] = [];
+    expect(() =>
+      assertCurrency(
+        "CHF",
+        { documentCurrency: "EUR", allowForeignCurrency: true },
+        (message) => warnings.push(message),
+      ),
+    ).not.toThrow();
+    expect(warnings.join(" ")).toContain("nicht umgerechnet");
+  });
+
+  it("bricht die Rechnungsabbildung bei fremder Waehrung ab", () => {
+    const order = grossOrder({ currencyCode: "USD" });
+    expect(() =>
+      mapOrderToInvoice({ order, settings, shopDomain: "demo.myshopify.com" }),
+    ).toThrow(CurrencyMismatchError);
+  });
+
+  it("bricht auch die Angebotsabbildung ab", () => {
+    const draft = draftOrder({ currencyCode: "USD" });
+    expect(() =>
+      mapDraftOrderToEstimate({ draftOrder: draft, settings, shopDomain: "demo.myshopify.com" }),
+    ).toThrow(CurrencyMismatchError);
   });
 });

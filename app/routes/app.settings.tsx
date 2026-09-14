@@ -153,6 +153,8 @@ export async function action({ request }: ActionFunctionArgs) {
       estimateTemplateId: numberOrNull(form, "estimateTemplateId"),
       projectId: numberOrNull(form, "projectId"),
       grossMode: String(form.get("grossMode") ?? "auto"),
+      documentCurrency: (text(form, "documentCurrency") ?? "EUR").toUpperCase(),
+      allowForeignCurrency: checkbox(form, "allowForeignCurrency"),
       defaultVatRate: numberOr(form, "defaultVatRate", 19),
       includeShipping: checkbox(form, "includeShipping"),
       shippingLabel: text(form, "shippingLabel") ?? "Versandkosten",
@@ -328,6 +330,20 @@ export default function Settings() {
               &quot;Wie im Shop&quot; vermeidet Rundungsdifferenzen, weil dann keine
               Umrechnung zwischen Netto und Brutto noetig ist.
             </s-text>
+
+            <s-text-field
+              label="Belegwaehrung"
+              name="documentCurrency"
+              value={settings.documentCurrency}
+              placeholder="EUR"
+              details="Waehrung, in der dein Papierkram-Mandant gefuehrt wird. Papierkram uebernimmt keine Waehrung je Beleg."
+            />
+            <s-checkbox
+              label="Bestellungen in abweichender Waehrung trotzdem uebertragen"
+              name="allowForeignCurrency"
+              checked={settings.allowForeignCurrency}
+              details="Aus gutem Grund aus: die Betraege werden nicht umgerechnet und landen unkommentiert als Belegwaehrung in der Buchhaltung."
+            />
 
             <s-number-field
               label="Standard-Steuersatz in Prozent"

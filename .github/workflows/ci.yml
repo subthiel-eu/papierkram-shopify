@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Ein laufender Durchgang je Branch reicht; aeltere abbrechen.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, Lint, Tests, Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Die Tests legen sich ihre eigene SQLite-Datei an; Prisma braucht die
+      # Variable aber schon fuer `generate`.
+      DATABASE_URL: file:./prisma/ci.sqlite
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Abhaengigkeiten installieren
+        run: npm ci
+
+      - name: Prisma Client erzeugen
+        run: npx prisma generate
+
+      - name: Typecheck (App und Extensions)
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    name: Abhaengigkeiten pruefen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Informativ: die verbleibenden Treffer stecken im Build-Werkzeug und
+      # sind im README aufgeschluesselt. Der Schritt soll den Durchgang
+      # deshalb nicht rot faerben, aber sichtbar machen, wenn Neues dazukommt.
+      - name: npm audit
+        run: npm audit --audit-level=high || true

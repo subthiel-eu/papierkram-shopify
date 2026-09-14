@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
 
+import { reportError } from "~/lib/report.server";
 import { authenticate } from "~/shopify.server";
 import { topicFromEvent } from "~/sync/business-cases";
 import { dispatchWebhook } from "~/sync/dispatch.server";
@@ -29,8 +30,13 @@ export async function action({ request }: ActionFunctionArgs) {
     if (result.dispatched.length > 0) kickWorker();
   } catch (error) {
     // Ein 500 laesst Shopify erneut zustellen; bei einem dauerhaften Fehler
-    // waere das eine Endlosschleife. Deshalb quittieren und protokollieren.
-    console.error(`[papierkram] Webhook ${topic} fuer ${shop} fehlgeschlagen`, error);
+    // waere das eine Endlosschleife. Deshalb quittieren und melden.
+    await reportError({
+      shop,
+      scope: `webhook.${topic}`,
+      message: "Webhook konnte nicht verarbeitet werden.",
+      error,
+    });
   }
 
   return new Response();

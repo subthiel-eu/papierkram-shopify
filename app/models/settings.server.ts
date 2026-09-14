@@ -92,6 +92,8 @@ export function toMappingSettings(settings: ShopSettings): MappingSettings {
       : "auto";
 
   return {
+    documentCurrency: settings.documentCurrency,
+    allowForeignCurrency: settings.allowForeignCurrency,
     grossMode,
     defaultVatRate: settings.defaultVatRate,
     includeShipping: settings.includeShipping,

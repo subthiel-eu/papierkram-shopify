@@ -1,6 +1,7 @@
 import type { SyncJob } from "@prisma/client";
 
 import prisma from "~/db.server";
+import { reportError } from "~/lib/report.server";
 import { logError, logWarning } from "~/models/log.server";
 import { getSettings, hasCredentials } from "~/models/settings.server";
 import {
@@ -11,6 +12,11 @@ import {
 import { unauthenticated } from "~/shopify.server";
 
 import type { DocumentMode } from "./business-cases";
+import { LinkInProgressError } from "~/models/links.server";
+
+import { ShopifyAuthError } from "./admin-client";
+
+import { CurrencyMismatchError } from "./mapper";
 
 import {
   buildContext,
@@ -80,8 +86,65 @@ export async function enqueue<T extends JobType>(args: {
   return prisma.syncJob.create({ data });
 }
 
+/**
+ * Wie lange ein Job laufen darf, bevor er als verwaist gilt.
+ *
+ * Stirbt der Prozess mitten in einem Job (Deploy, Neustart, OOM), bliebe er
+ * sonst fuer immer auf "running" stehen - der Beleg entstuende nie und
+ * niemand wuerde es merken.
+ */
+const STALE_AFTER_MINUTES = Number(process.env.SYNC_JOB_STALE_MINUTES || 15);
+
+/**
+ * Unterhalb dieser Grenze werden keine Jobs mehr gestartet.
+ *
+ * Papierkram misst den Zugriff in Credits je Monat (10.000 im Tarif M). Ist
+ * das Kontingent aufgebraucht, laeuft jeder Job stumpf in fuenf Fehlversuche
+ * und die Warteschlange raeumt sich selbst ab. Besser: warten, bis das
+ * Kontingent zurueckgesetzt ist.
+ */
+const QUOTA_FLOOR = Number(process.env.PAPIERKRAM_QUOTA_FLOOR || 25);
+
+/** Wie lange bei erschoepftem Kontingent pausiert wird. */
+const QUOTA_PAUSE_HOURS = 6;
+
+/** Holt verwaiste Jobs zurueck in die Warteschlange. */
+export async function recoverStaleJobs(): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_AFTER_MINUTES * 60_000);
+
+  const stale = await prisma.syncJob.findMany({
+    where: { status: "running", startedAt: { lt: cutoff } },
+    select: { id: true, shop: true, type: true, attempts: true, maxAttempts: true },
+  });
+  if (stale.length === 0) return 0;
+
+  for (const job of stale) {
+    // Der Versuch wurde beim Greifen bereits gezaehlt; ein abgestuerzter
+    // Prozess darf das Budget nicht unbemerkt aufbrauchen, aber auch nicht
+    // endlos ignoriert werden.
+    const exhausted = job.attempts >= job.maxAttempts;
+    await prisma.syncJob.update({
+      where: { id: job.id },
+      data: exhausted
+        ? { status: "failed", lastError: "Abgebrochen: Vorgang wurde unterbrochen." }
+        : { status: "pending", runAfter: new Date(), startedAt: null },
+    });
+    await logWarning(
+      job.shop,
+      `job.${job.type}`,
+      exhausted
+        ? `Der Vorgang wurde mehrfach unterbrochen und wird nicht weiter versucht.`
+        : `Der Vorgang wurde unterbrochen (Versuch ${job.attempts}/${job.maxAttempts}) und laeuft erneut.`,
+    );
+  }
+
+  return stale.length;
+}
+
 /** Faellige Jobs holen und der Reihe nach abarbeiten. */
 export async function processDueJobs(limit = 5): Promise<number> {
+  await recoverStaleJobs();
+
   const due = await prisma.syncJob.findMany({
     where: { status: "pending", runAfter: { lte: new Date() } },
     orderBy: { runAfter: "asc" },
@@ -89,12 +152,23 @@ export async function processDueJobs(limit = 5): Promise<number> {
   });
 
   let processed = 0;
+  // Ein Shop pro Durchlauf hoechstens einmal pruefen.
+  const quotaChecked = new Map<string, boolean>();
+
   for (const job of due) {
+    if (!quotaChecked.has(job.shop)) {
+      quotaChecked.set(job.shop, await hasQuota(job.shop));
+    }
+    if (!quotaChecked.get(job.shop)) {
+      await postponeForQuota(job);
+      continue;
+    }
+
     // Zwischen Auswahl und Start kann ein anderer Worker den Job genommen
     // haben; updateMany mit Statusfilter macht das Greifen atomar.
     const claimed = await prisma.syncJob.updateMany({
       where: { id: job.id, status: "pending" },
-      data: { status: "running", attempts: { increment: 1 } },
+      data: { status: "running", attempts: { increment: 1 }, startedAt: new Date() },
     });
     if (claimed.count === 0) continue;
 
@@ -102,6 +176,30 @@ export async function processDueJobs(limit = 5): Promise<number> {
     processed++;
   }
   return processed;
+}
+
+/** Ist noch genug Monatskontingent da, um einen Job zu starten? */
+async function hasQuota(shop: string): Promise<boolean> {
+  const settings = await prisma.shopSettings.findUnique({
+    where: { shop },
+    select: { remainingQuota: true },
+  });
+  // Ohne bekannten Stand einfach laufen lassen - der erste Aufruf meldet ihn.
+  if (!settings || settings.remainingQuota === null) return true;
+  return settings.remainingQuota > QUOTA_FLOOR;
+}
+
+/** Schiebt einen Job, ohne einen Versuch zu verbrauchen. */
+async function postponeForQuota(job: SyncJob) {
+  await prisma.syncJob.update({
+    where: { id: job.id },
+    data: { runAfter: new Date(Date.now() + QUOTA_PAUSE_HOURS * 3_600_000) },
+  });
+  await logWarning(
+    job.shop,
+    `job.${job.type}`,
+    `Das Papierkram-Monatskontingent ist aufgebraucht. Der Vorgang wird in ${QUOTA_PAUSE_HOURS} Stunden erneut versucht.`,
+  );
 }
 
 async function runJob(job: SyncJob) {
@@ -146,7 +244,7 @@ async function runJob(job: SyncJob) {
 
     await prisma.syncJob.update({
       where: { id: job.id },
-      data: { status: "done", lastError: null },
+      data: { status: "done", lastError: null, startedAt: null },
     });
   } catch (error) {
     await handleJobFailure(job, error);
@@ -166,6 +264,7 @@ async function handleJobFailure(job: SyncJob, error: unknown) {
       data: {
         status: "pending",
         lastError: message,
+        startedAt: null,
         runAfter: new Date(Date.now() + delayMinutes * 60_000),
       },
     });
@@ -180,7 +279,7 @@ async function handleJobFailure(job: SyncJob, error: unknown) {
 
   await prisma.syncJob.update({
     where: { id: job.id },
-    data: { status: "failed", lastError: message },
+    data: { status: "failed", lastError: message, startedAt: null },
   });
   await logError(
     job.shop,
@@ -188,11 +287,25 @@ async function handleJobFailure(job: SyncJob, error: unknown) {
     `Endgueltig fehlgeschlagen nach ${attempts} Versuchen: ${message}`,
     error,
   );
+  // Aufgegebene Vorgaenge sind das, was jemand sehen muss.
+  await reportError({
+    shop: job.shop,
+    scope: `job.${job.type}`,
+    message: `Endgueltig fehlgeschlagen nach ${attempts} Versuchen: ${message}`,
+    error,
+    context: { jobId: job.id, payload: job.payload },
+  });
 }
 
 function isRetryable(error: unknown): boolean {
   if (error instanceof PapierkramNotConfiguredError) return false;
+  // Eine falsche Waehrung behebt sich nicht durch Warten.
+  if (error instanceof CurrencyMismatchError) return false;
+  // Entzogene Berechtigung ebenfalls nicht - die App muss neu autorisiert werden.
+  if (error instanceof ShopifyAuthError) return false;
   if (error instanceof PapierkramNetworkError) return true;
+  // Ein paralleler Vorgang ist gleich fertig - spaeter nochmal nachsehen.
+  if (error instanceof LinkInProgressError) return true;
   if (error instanceof PapierkramApiError) return error.isRetryable;
   // Unbekannte Fehler einmal wiederholen zu lassen ist guenstiger als
   // einen Beleg wegen eines Aussetzers zu verlieren.
@@ -203,7 +316,7 @@ function isRetryable(error: unknown): boolean {
 export async function retryJob(shop: string, id: string) {
   await prisma.syncJob.updateMany({
     where: { shop, id },
-    data: { status: "pending", attempts: 0, runAfter: new Date(), lastError: null },
+    data: { status: "pending", attempts: 0, runAfter: new Date(), lastError: null, startedAt: null },
   });
 }
 

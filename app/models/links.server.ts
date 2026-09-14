@@ -17,12 +17,74 @@ export async function upsertLink(args: {
   totalGross?: number | null;
   currency?: string | null;
   url?: string | null;
+  metafieldsHash?: string | null;
 }): Promise<DocumentLink> {
   const { shop, kind, shopifyGid, ...rest } = args;
   return prisma.documentLink.upsert({
     where: { shop_kind_shopifyGid: { shop, kind, shopifyGid } },
     create: { shop, kind, shopifyGid, ...rest },
     update: rest,
+  });
+}
+
+/** Zustand einer Verknuepfung, solange der Beleg noch angelegt wird. */
+export const RESERVED_STATE = "creating";
+
+/**
+ * Fehler, wenn zu demselben Objekt bereits ein Beleg entsteht.
+ *
+ * Ohne Reservierung koennten ein Webhook-Job und ein Klick in der Bestellung
+ * gleichzeitig durch die Pruefung laufen und zwei Belege in Papierkram
+ * anlegen - von denen nur einer verknuepft bliebe.
+ */
+export class LinkInProgressError extends Error {
+  constructor(kind: DocumentKind) {
+    super(
+      kind === "estimate"
+        ? "Zu diesem Entwurf wird gerade ein Angebot angelegt. Bitte einen Moment warten."
+        : "Zu dieser Bestellung wird gerade eine Rechnung angelegt. Bitte einen Moment warten.",
+    );
+    this.name = "LinkInProgressError";
+  }
+}
+
+/**
+ * Reserviert die Verknuepfung, bevor Papierkram aufgerufen wird.
+ *
+ * Der Unique-Index auf (shop, kind, shopifyGid) ist der eigentliche
+ * Wechselschutz: der zweite Versuch scheitert beim Einfuegen.
+ */
+export async function reserveLink(args: {
+  shop: string;
+  kind: DocumentKind;
+  shopifyGid: string;
+  shopifyLabel?: string | null;
+}): Promise<void> {
+  try {
+    await prisma.documentLink.create({
+      data: {
+        shop: args.shop,
+        kind: args.kind,
+        shopifyGid: args.shopifyGid,
+        shopifyLabel: args.shopifyLabel ?? null,
+        // 0 ist keine gueltige Papierkram-ID und markiert die Reservierung.
+        papierkramId: 0,
+        state: RESERVED_STATE,
+      },
+    });
+  } catch {
+    throw new LinkInProgressError(args.kind);
+  }
+}
+
+/** Gibt eine Reservierung frei, wenn der Beleg nicht zustande kam. */
+export async function releaseReservation(
+  shop: string,
+  kind: DocumentKind,
+  shopifyGid: string,
+): Promise<void> {
+  await prisma.documentLink.deleteMany({
+    where: { shop, kind, shopifyGid, state: RESERVED_STATE, papierkramId: 0 },
   });
 }
 

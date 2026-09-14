@@ -61,6 +61,14 @@ model ShopSettings {
   grossMode        String  @default("auto")
   /// Standard-USt-Satz, wenn Shopify keine Steuerzeile liefert.
   defaultVatRate   Float   @default(19)
+  /// Waehrung, in der der Papierkram-Mandant gefuehrt wird. Die API
+  /// uebernimmt keine Waehrungsangabe je Beleg, deshalb muessen Shop und
+  /// Mandant zusammenpassen.
+  documentCurrency String  @default("EUR")
+  /// Bestellungen in abweichender Waehrung trotzdem uebertragen. Aus gutem
+  /// Grund aus: die Betraege landen sonst unkommentiert als documentCurrency
+  /// in der Buchhaltung.
+  allowForeignCurrency Boolean @default(false)
   /// Versandkosten als eigene Position aufnehmen.
   includeShipping  Boolean @default(true)
   /// Bezeichnung der Versandposition.
@@ -136,6 +144,10 @@ model DocumentLink {
   currency      String?
   /// Direktlink in die Papierkram-Oberflaeche.
   url           String?
+  /// Pruefsumme der zuletzt geschriebenen Metafelder. Verhindert, dass ein
+  /// Statusabgleich Metafelder neu schreibt, Shopify daraufhin orders/updated
+  /// feuert und damit den naechsten Abgleich ausloest.
+  metafieldsHash String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -160,6 +172,9 @@ model SyncJob {
   attempts    Int       @default(0)
   maxAttempts Int       @default(5)
   runAfter    DateTime  @default(now())
+  /// Zeitpunkt, zu dem der Job auf "running" gesetzt wurde. Stirbt der
+  /// Prozess mittendrin, erkennt der Worker den Job daran wieder.
+  startedAt   DateTime?
   lastError   String?
   /// Verhindert doppelte Jobs fuer dasselbe Objekt.
   dedupeKey   String?

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { runGraphql, type AdminGraphqlClient } from "./admin-client";
 import {
   METAFIELD_DEFINITION_CREATE_MUTATION,
@@ -84,6 +86,25 @@ export async function ensureMetafieldDefinitions(admin: AdminGraphqlClient) {
   }
 
   return { created, skipped };
+}
+
+/**
+ * Pruefsumme der zu schreibenden Werte.
+ *
+ * Shopify feuert nach einer Metafeld-Aenderung orders/updated. Schreibt der
+ * Statusabgleich die Felder jedes Mal neu, loest er damit den naechsten
+ * Abgleich aus - eine Schleife, die nur das Papierkram-Kontingent verbraucht.
+ * Deshalb wird vorher verglichen.
+ */
+export function metafieldsFingerprint(
+  values: Record<string, string | number | null | undefined>,
+): string {
+  const normalized = Object.entries(values)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => [key, String(value)] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 32);
 }
 
 /** Schreibt Metafelder. Leere Werte werden ausgelassen. */

@@ -14,3 +14,4 @@ dist
 /prisma/dev.sqlite
 .vite
 coverage
+.eslintcache
