@@ -1,8 +1,16 @@
 # Roadmap
 
-Stand: September 2026. Die Integration überträgt Bestellungen als Rechnungen,
-Entwürfe als Angebote und legt Kontakte an; Auslöser sind je Geschäftsfall
-konfigurierbar. Was hier steht, baut darauf auf.
+Stand: September 2026.
+
+**Sprint 1 bis 4 sind umgesetzt** — Vorschau, Versandtexte, PDF, Tag-Steuerung,
+Sammelaktion, Nachtrag, Steuerfälle, Flow-Aktion und Statusabgleich. Was unten
+unter „Sprint" steht, ist damit Beschreibung des Gebauten; offen ist der
+Abschnitt „Später".
+
+Eine Abweichung vom ursprünglichen Plan: die Flow-Aktion gibt es nur für
+Rechnungen. Flow bietet Referenzfeldtypen für Bestellung, Kunde, Produkt und
+Unternehmen an — für Bestellentwürfe keinen. Eine Aktion, in die man die
+Entwurfs-Kennung von Hand einträgt, wäre schlechter als keine.
 
 ## Leitplanken
 

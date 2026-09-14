@@ -49,6 +49,11 @@ api_version = "2026-07"
   ]
   uri = "/webhooks/business"
 
+  # Das Ergebnis der Massenabfrage fuer den Nachtrag historischer Bestellungen.
+  [[webhooks.subscriptions]]
+  topics = [ "bulk_operations/finish" ]
+  uri = "/webhooks/bulk-operations"
+
   [[webhooks.subscriptions]]
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
   uri = "/webhooks/compliance"

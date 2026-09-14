@@ -1,0 +1,23 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram Rechnung erstellen"
+handle = "papierkram-flow-invoice"
+description = "Legt zu einer Bestellung eine Rechnung in Papierkram an. Die Bedingungen dafuer baust du im Workflow."
+type = "flow_action"
+runtime_url = "/api/flow/invoice"
+
+  [settings]
+
+    # Referenzfelder brauchen weder key noch name; Flow fuellt die Kennung
+    # aus dem Ausloeser des Workflows.
+    [[settings.fields]]
+    type = "order_reference"
+    required = true
+
+    [[settings.fields]]
+    type = "single_line_text_field"
+    key = "mode"
+    name = "Nachbehandlung"
+    description = "draft = als Entwurf lassen, pdf = festschreiben, email = festschreiben und senden. Leer = Voreinstellung der App."
+    required = false

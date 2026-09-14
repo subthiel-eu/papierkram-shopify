@@ -32,6 +32,7 @@ export default function App() {
           Uebersicht
         </Link>
         <Link to="/app/documents">Belege</Link>
+        <Link to="/app/backfill">Nachtragen</Link>
         <Link to="/app/propositions">Positionen</Link>
         <Link to="/app/logs">Protokoll</Link>
         <Link to="/app/settings">Einstellungen</Link>

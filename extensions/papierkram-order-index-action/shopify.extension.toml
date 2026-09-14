@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Rechnungen fuer Auswahl"
+handle = "papierkram-order-index-action"
+description = "Legt fuer mehrere markierte Bestellungen Papierkram-Rechnungen an."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/OrderIndexAction.tsx"
+  target = "admin.order-index.selection-action.render"

@@ -34,6 +34,8 @@ export interface PapierkramContext {
 export interface ActionResult {
   ok: boolean;
   error?: string;
+  /** Ergebnis einer Sammelaktion. */
+  bulk?: { queued: number; skipped: number; failed: number };
   warnings?: string[];
   reused?: boolean;
   document?: {
@@ -104,6 +106,59 @@ export function stateTone(
     default:
       return "neutral";
   }
+}
+
+
+export interface PreviewLine {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  vatPercent: number;
+  unitPrice: number;
+  discountPerUnit: number;
+  lineTotal: number;
+}
+
+export interface DocumentPreview {
+  kind: "invoice" | "estimate";
+  name: string;
+  documentDate: string | null;
+  gross: boolean;
+  currency: string;
+  lineItems: PreviewLine[];
+  totals: { net: number; vat: number; gross: number };
+  shopifyTotal: number;
+  difference: number;
+  warnings: string[];
+  billingCompany: string | null;
+  taxCase: string;
+  taxNote: string | null;
+  vatId: string | null;
+  blockers: string[];
+}
+
+/** Rechnet die Abbildung durch, ohne etwas an Papierkram zu senden. */
+export async function loadPreview(
+  id: string,
+): Promise<{ ok: boolean; preview?: DocumentPreview; error?: string }> {
+  const response = await fetch(
+    `/api/papierkram/preview?id=${encodeURIComponent(id)}`,
+    { headers: await authHeaders() },
+  );
+  if (!response.ok) {
+    return { ok: false, error: `Die App antwortet nicht (HTTP ${response.status}).` };
+  }
+  return (await response.json()) as {
+    ok: boolean;
+    preview?: DocumentPreview;
+    error?: string;
+  };
+}
+
+/** Betrag mit Waehrung, wie ihn ein deutscher Beleg zeigt. */
+export function formatMoney(value: number, currency: string): string {
+  return `${value.toFixed(2).replace(".", ",")} ${currency}`;
 }
 
 /** Link in die App-Einstellungen im Shopify-Admin. */

@@ -1,4 +1,5 @@
 import { processDueJobs, pruneJobs } from "./queue.server";
+import { scheduleReconciliation } from "./reconcile.server";
 
 declare global {
   var papierkramWorker: NodeJS.Timeout | undefined;
@@ -22,7 +23,10 @@ export function startWorker() {
   global.papierkramWorker = setInterval(() => {
     if (running) return;
     running = true;
-    processDueJobs()
+    // Erst faellige Abgleiche einplanen, dann die Warteschlange abarbeiten.
+    scheduleReconciliation()
+      .catch((error) => console.error("[papierkram] Abgleich-Planung fehlgeschlagen", error))
+      .then(() => processDueJobs())
       .catch((error) => console.error("[papierkram] Worker-Durchlauf fehlgeschlagen", error))
       .finally(() => {
         running = false;

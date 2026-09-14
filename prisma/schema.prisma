@@ -86,6 +86,41 @@ model ShopSettings {
   /// Kunden ohne Firmenname unter "Vorname Nachname" anlegen.
   fallbackToPersonName Boolean @default(true)
 
+  // --- Versandtexte ---
+  /// Betreff und Text beim Versand per E-Mail. Platzhalter:
+  /// {{beleg_nr}}, {{kunde}}, {{summe}}, {{shop}}, {{bestellung}}
+  invoiceEmailSubject  String @default("Ihre Rechnung {{beleg_nr}}")
+  invoiceEmailBody     String @default("Guten Tag,\n\nim Anhang finden Sie Ihre Rechnung {{beleg_nr}}. Bitte beachten Sie die Zahlungsmodalitaeten im Dokument.\n\nVielen Dank fuer Ihren Auftrag!")
+  estimateEmailSubject String @default("Ihr Angebot {{beleg_nr}}")
+  estimateEmailBody    String @default("Guten Tag,\n\nim Anhang finden Sie unser Angebot {{beleg_nr}}. Bei Rueckfragen melden Sie sich gerne.\n\nMit freundlichen Gruessen")
+
+  // --- Steuerung ueber Bestell-Tags ---
+  /// Bestellungen mit diesem Tag werden nie uebertragen.
+  skipTag  String @default("papierkram:skip")
+  /// Bestellungen mit diesem Tag werden uebertragen, auch ohne passenden Ausloeser.
+  forceTag String @default("papierkram:invoice")
+
+  // --- Steuerfaelle ---
+  /// Sitzland des Haendlers als ISO-Code. Entscheidet, was Inland ist.
+  homeCountry          String  @default("DE")
+  /// standard | kleinunternehmer (§ 19 UStG)
+  taxScheme            String  @default("standard")
+  /// Innergemeinschaftliche B2B-Lieferung mit 0 % und Pflichthinweis.
+  reverseChargeEnabled Boolean @default(true)
+  reverseChargeNote    String  @default("Steuerschuldnerschaft des Leistungsempfaengers (Reverse Charge) gemaess Art. 196 MwStSystRL.")
+  kleinunternehmerNote String  @default("Gemaess § 19 UStG wird keine Umsatzsteuer berechnet.")
+  /// auto | order_attribute | order_metafield | customer_metafield | none
+  vatIdSource          String  @default("auto")
+  /// Schluessel bzw. namespace.key, je nach Quelle.
+  vatIdKey             String  @default("vat_id")
+
+  // --- Statusabgleich (Papierkram -> Shopify) ---
+  reconcileEnabled       Boolean   @default(false)
+  reconcileIntervalHours Int       @default(6)
+  reconcileLastRunAt     DateTime?
+  paidTag                String    @default("papierkram:bezahlt")
+  overdueTag             String    @default("papierkram:ueberfaellig")
+
   // --- Sonstiges ---
   /// Belegname, unterstuetzt {{order_name}}, {{order_number}}, {{shop}}, {{customer}}
   documentNameTemplate String @default("Shopify Bestellung {{order_name}}")
@@ -204,6 +239,38 @@ model LogEntry {
 
   @@index([shop, createdAt])
   @@index([shop, level])
+}
+
+/// Ein Nachtrag historischer Bestellungen.
+model BackfillRun {
+  id   String @id @default(cuid())
+  shop String
+
+  /// pending | running | done | failed
+  status String @default("pending")
+
+  fromDate DateTime
+  toDate   DateTime
+  /// Nur bezahlte Bestellungen beruecksichtigen.
+  onlyPaid Boolean @default(true)
+  /// Bestellungen ueberspringen, zu denen es schon einen Beleg gibt.
+  skipExisting Boolean @default(true)
+
+  /// GID der Shopify-Massenabfrage, solange sie laeuft.
+  bulkOperationId String?
+  /// Schaetzung vor dem Start.
+  estimatedOrders Int?
+  /// Tatsaechlich gelieferte Bestellungen.
+  foundOrders     Int?
+  /// Davon eingeplant (der Rest hatte bereits einen Beleg).
+  queuedOrders    Int?
+  error           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shop, status])
+  @@index([bulkOperationId])
 }
 
 /// Zuordnung Shopify-Produkt/Variante -> Papierkram Position (Proposition).

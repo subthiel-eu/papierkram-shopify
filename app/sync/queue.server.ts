@@ -18,6 +18,7 @@ import { ShopifyAuthError } from "./admin-client";
 
 import { CurrencyMismatchError } from "./mapper";
 
+import { reconcileDocuments } from "./reconcile.server";
 import {
   buildContext,
   createEstimateForDraftOrder,
@@ -31,13 +32,15 @@ export type JobType =
   | "order_invoice"
   | "draft_order_estimate"
   | "customer_upsert"
-  | "refresh_document";
+  | "refresh_document"
+  | "reconcile_documents";
 
 export interface JobPayloads {
   order_invoice: { orderGid: string; force?: boolean; mode?: DocumentMode };
   draft_order_estimate: { draftOrderGid: string; force?: boolean; mode?: DocumentMode };
   customer_upsert: { customerGid: string };
   refresh_document: { kind: "invoice" | "estimate"; shopifyGid: string };
+  reconcile_documents: Record<string, never>;
 }
 
 /**
@@ -237,6 +240,9 @@ async function runJob(job: SyncJob) {
         break;
       case "refresh_document":
         await refreshDocument(context, payload.kind, payload.shopifyGid);
+        break;
+      case "reconcile_documents":
+        await reconcileDocuments(context);
         break;
       default:
         throw new Error(`Unbekannter Job-Typ: ${job.type}`);

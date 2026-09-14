@@ -16,6 +16,7 @@ import type {
   Order,
   TaxLine,
 } from "./shopify-types";
+import { resolveTaxCase, type TaxCaseResult } from "./tax-cases";
 
 /**
  * Die Einstellungen, die den Mapper steuern. Entspricht einem Ausschnitt aus
@@ -37,6 +38,14 @@ export interface MappingSettings {
   applyDiscounts: boolean;
   documentNameTemplate: string;
   fallbackToPersonName: boolean;
+  /** Sitzland des Haendlers, entscheidet ueber Inland und EU-Ausland. */
+  homeCountry: string;
+  taxScheme: string;
+  reverseChargeEnabled: boolean;
+  reverseChargeNote: string;
+  kleinunternehmerNote: string;
+  vatIdSource: string;
+  vatIdKey: string;
   paymentTermId?: number | null;
   invoiceTemplateId?: number | null;
   estimateTemplateId?: number | null;
@@ -46,6 +55,14 @@ export interface MappingSettings {
 export const DEFAULT_MAPPING_SETTINGS: MappingSettings = {
   documentCurrency: "EUR",
   allowForeignCurrency: false,
+  homeCountry: "DE",
+  taxScheme: "standard",
+  reverseChargeEnabled: true,
+  reverseChargeNote:
+    "Steuerschuldnerschaft des Leistungsempfaengers (Reverse Charge) gemaess Art. 196 MwStSystRL.",
+  kleinunternehmerNote: "Gemaess § 19 UStG wird keine Umsatzsteuer berechnet.",
+  vatIdSource: "auto",
+  vatIdKey: "vat_id",
   grossMode: "auto",
   defaultVatRate: 19,
   includeShipping: true,
@@ -342,6 +359,8 @@ export interface OrderMappingResult {
   };
   /** Hinweise fuer das Protokoll, z.B. teilweise erstattete Positionen. */
   warnings: string[];
+  /** Ermittelter Steuerfall, fuer Vorschau und Protokoll. */
+  taxCase: TaxCaseResult;
 }
 
 /**
@@ -368,6 +387,15 @@ export function mapOrderToInvoice(args: {
   const sourceBasis = order.taxesIncluded ? "gross" : "net";
   const orderHasTax = toNumber(order.totalTaxSet?.shopMoney?.amount) > 0;
 
+  const billingForTax = order.billingAddress ?? order.shippingAddress;
+  const taxCase = resolveTaxCase({
+    settings,
+    homeCountry: settings.homeCountry,
+    destination: billingForTax,
+    orderHasTax,
+    order,
+  });
+
   const lineItems: LineItemInput[] = [];
 
   for (const line of order.lineItems.nodes) {
@@ -387,10 +415,12 @@ export function mapOrderToInvoice(args: {
       );
     }
 
-    const vatRate = resolveVatRate(line.taxLines, {
-      orderHasTax,
-      defaultVatRate: settings.defaultVatRate,
-    });
+    const vatRate = taxCase.zeroRated
+      ? 0
+      : resolveVatRate(line.taxLines, {
+          orderHasTax,
+          defaultVatRate: settings.defaultVatRate,
+        });
 
     // Rabattzuweisungen gelten fuer die urspruengliche Menge.
     const discountTotal =
@@ -424,10 +454,12 @@ export function mapOrderToInvoice(args: {
     for (const shipping of order.shippingLines.nodes) {
       const amount = toNumber(shipping.originalPriceSet?.shopMoney?.amount);
       if (amount <= 0) continue;
-      const vatRate = resolveVatRate(shipping.taxLines, {
-        orderHasTax,
-        defaultVatRate: settings.defaultVatRate,
-      });
+      const vatRate = taxCase.zeroRated
+        ? 0
+        : resolveVatRate(shipping.taxLines, {
+            orderHasTax,
+            defaultVatRate: settings.defaultVatRate,
+          });
       lineItems.push(
         buildLineItem({
           name: shipping.title || settings.shippingLabel,
@@ -477,14 +509,24 @@ export function mapOrderToInvoice(args: {
     date: (order.processedAt ?? order.createdAt).slice(0, 10),
   });
 
+  // Der Pflichthinweis gehoert auf den Beleg, nicht nur in die Zahlen.
+  const description = [taxCase.note, order.note].filter(Boolean).join("\n\n") || undefined;
+
   const invoice: OrderMappingResult["invoice"] = {
     name,
-    description: order.note || undefined,
+    description,
     document_date: (order.processedAt ?? order.createdAt).slice(0, 10),
     gross,
     line_items: lineItems,
-    billing: buildBillingAddress(billingAddress, order.customer, order.email),
+    billing: {
+      ...buildBillingAddress(billingAddress, order.customer, order.email),
+      ...(taxCase.vatId ? { ust_idnr: taxCase.vatId } : {}),
+    },
   };
+
+  if (taxCase.taxCase === "reverse_charge" && !taxCase.vatId) {
+    warnings.push("Reverse Charge ohne USt-IdNr. - bitte pruefen.");
+  }
 
   if (args.customerId) {
     invoice.customer = { id: args.customerId };
@@ -499,7 +541,7 @@ export function mapOrderToInvoice(args: {
     invoice.payment_term = { id: settings.paymentTermId };
   }
 
-  return { invoice, warnings };
+  return { invoice, warnings, taxCase };
 }
 
 export interface DraftOrderMappingResult {
@@ -525,11 +567,19 @@ export function mapDraftOrderToEstimate(args: {
   const sourceBasis = draftOrder.taxesIncluded ? "gross" : "net";
   const orderHasTax = toNumber(draftOrder.totalTaxSet?.shopMoney?.amount) > 0;
 
+  // Ein Entwurf traegt noch keine USt-IdNr. aus dem Checkout; Reverse Charge
+  // laesst sich also erst an der Bestellung entscheiden. Die
+  // Kleinunternehmerregelung gilt dagegen unabhaengig davon.
+  const zeroRated = settings.taxScheme === "kleinunternehmer";
+  const taxNote = zeroRated ? settings.kleinunternehmerNote : "";
+
   const lineItems: LineItemInput[] = draftOrder.lineItems.nodes.map((line) => {
-    const vatRate = resolveVatRate(line.taxLines, {
-      orderHasTax,
-      defaultVatRate: settings.defaultVatRate,
-    });
+    const vatRate = zeroRated
+      ? 0
+      : resolveVatRate(line.taxLines, {
+          orderHasTax,
+          defaultVatRate: settings.defaultVatRate,
+        });
     const original = toNumber(line.originalUnitPriceSet?.shopMoney?.amount);
     const discounted = line.discountedUnitPriceSet
       ? toNumber(line.discountedUnitPriceSet.shopMoney.amount)
@@ -564,10 +614,12 @@ export function mapDraftOrderToEstimate(args: {
           unit: "Pauschale",
           unitAmount: amount,
           discountTotal: 0,
-          vatRate: resolveVatRate(draftOrder.shippingLine.taxLines, {
-            orderHasTax,
-            defaultVatRate: settings.defaultVatRate,
-          }),
+          vatRate: zeroRated
+            ? 0
+            : resolveVatRate(draftOrder.shippingLine.taxLines, {
+                orderHasTax,
+                defaultVatRate: settings.defaultVatRate,
+              }),
           sourceBasis,
           targetBasis,
           applyDiscounts: false,
@@ -589,7 +641,7 @@ export function mapDraftOrderToEstimate(args: {
       customer: resolveContactName(draftOrder.customer, billingAddress, true) ?? "",
       date: draftOrder.createdAt.slice(0, 10),
     }),
-    description: draftOrder.note2 || undefined,
+    description: [taxNote, draftOrder.note2].filter(Boolean).join("\n\n") || undefined,
     document_date: draftOrder.createdAt.slice(0, 10),
     gross,
     line_items: lineItems,

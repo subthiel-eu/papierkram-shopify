@@ -6,6 +6,7 @@ import { getSettings, hasCredentials } from "~/models/settings.server";
 import {
   findBusinessCase,
   subjectGid,
+  subjectOf,
   type BusinessCase,
   type DocumentMode,
 } from "./business-cases";
@@ -42,12 +43,42 @@ export async function dispatchWebhook(args: {
     return { skipped: "Papierkram ist fuer diesen Shop nicht eingerichtet.", dispatched: [] };
   }
 
+  const tags = parseTags(payload);
+  if (settings.skipTag && tags.includes(settings.skipTag.toLowerCase())) {
+    return { skipped: `Tag "${settings.skipTag}" gesetzt.`, dispatched: [] };
+  }
+
   const rules = await activeRulesForTopic(shop, topic);
-  if (rules.length === 0) {
+  const forced =
+    Boolean(settings.forceTag) &&
+    tags.includes(settings.forceTag.toLowerCase()) &&
+    subjectOf(topic) === "order";
+
+  if (rules.length === 0 && !forced) {
     return { skipped: `Kein Geschaeftsfall auf ${topic} geschaltet.`, dispatched: [] };
   }
 
   const dispatched: BusinessCase[] = [];
+
+  // Der Erzwingen-Tag ersetzt einen fehlenden Ausloeser, aber keine Regel:
+  // ist "Rechnung aus Bestellung" bereits geschaltet, greift die echte Regel.
+  if (forced && !rules.some((rule) => rule.businessCase === "invoice_create")) {
+    const handled = await applyRule({
+      shop,
+      topic,
+      payload,
+      gid,
+      rule: {
+        businessCase: "invoice_create",
+        topic,
+        enabled: true,
+        delaySeconds: 0,
+        mode: null,
+      } as WebhookRule,
+      businessCase: "invoice_create",
+    });
+    if (handled) dispatched.push("invoice_create");
+  }
 
   for (const rule of rules) {
     const businessCase = rule.businessCase as BusinessCase;
@@ -179,6 +210,21 @@ async function applyRule(args: {
     default:
       return false;
   }
+}
+
+/**
+ * Tags aus dem Webhook-Rumpf. Shopify liefert sie als kommagetrennte Liste,
+ * damit ist kein zusaetzlicher API-Aufruf noetig.
+ */
+function parseTags(payload: unknown): string[] {
+  const raw = (payload as { tags?: unknown } | null)?.tags;
+  if (typeof raw === "string") {
+    return raw.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  }
+  if (Array.isArray(raw)) {
+    return raw.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean);
+  }
+  return [];
 }
 
 /** Regel-Modus, sonst die Voreinstellung des Shops (im Worker aufgeloest). */

@@ -7,6 +7,7 @@ import { authenticate } from "~/shopify.server";
 import {
   buildContext,
   describeError,
+  documentPdf,
   refreshDocument,
 } from "~/sync/service.server";
 
@@ -56,6 +57,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const form = await request.formData();
+  const intent = String(form.get("intent") ?? "refresh");
   const shopifyGid = String(form.get("shopifyGid") ?? "");
   const kind = String(form.get("kind") ?? "invoice") as DocumentKind;
 
@@ -65,6 +67,29 @@ export async function action({ request }: ActionFunctionArgs) {
 
   try {
     const context = await buildContext(session.shop, admin);
+
+    if (intent === "pdf") {
+      const papierkramId = Number(form.get("papierkramId"));
+      if (!Number.isFinite(papierkramId) || papierkramId <= 0) {
+        return json({ ok: false, message: "Kein Beleg angegeben." }, { status: 400 });
+      }
+      if (kind === "company") {
+        return json({ ok: false, message: "Kontakte haben kein PDF." }, { status: 400 });
+      }
+
+      const pdf = await documentPdf(context, kind, papierkramId);
+      const label = String(form.get("documentNo") ?? papierkramId).replace(/[^\w.-]+/g, "-");
+
+      // Der Browser laedt die Antwort des Formulars direkt herunter; ein
+      // einfacher Link wuerde den Session-Token nicht mitfuehren.
+      return new Response(pdf, {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="${kind === "invoice" ? "Rechnung" : "Angebot"}-${label}.pdf"`,
+        },
+      });
+    }
+
     await refreshDocument(context, kind, shopifyGid);
     return json({ ok: true, message: "Status aus Papierkram aktualisiert." });
   } catch (error) {
@@ -143,13 +168,28 @@ export default function Documents() {
                     {document.kind === "company" ? (
                       "-"
                     ) : (
-                      <Form method="post">
-                        <input type="hidden" name="shopifyGid" value={document.shopifyGid} />
-                        <input type="hidden" name="kind" value={document.kind} />
-                        <s-button type="submit" variant="tertiary" loading={busy}>
-                          Status holen
-                        </s-button>
-                      </Form>
+                      <s-stack direction="inline" gap="small">
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="refresh" />
+                          <input type="hidden" name="shopifyGid" value={document.shopifyGid} />
+                          <input type="hidden" name="kind" value={document.kind} />
+                          <s-button type="submit" variant="tertiary" loading={busy}>
+                            Status holen
+                          </s-button>
+                        </Form>
+                        {document.papierkramId > 0 ? (
+                          <Form method="post" reloadDocument>
+                            <input type="hidden" name="intent" value="pdf" />
+                            <input type="hidden" name="shopifyGid" value={document.shopifyGid} />
+                            <input type="hidden" name="kind" value={document.kind} />
+                            <input type="hidden" name="papierkramId" value={document.papierkramId} />
+                            <input type="hidden" name="documentNo" value={document.documentNo ?? ""} />
+                            <s-button type="submit" variant="tertiary">
+                              PDF
+                            </s-button>
+                          </Form>
+                        ) : null}
+                      </s-stack>
                     )}
                   </s-table-cell>
                 </s-table-row>

@@ -34,6 +34,15 @@ export interface Address {
   phone: string | null;
 }
 
+export interface Metafield {
+  value: string | null;
+}
+
+export interface CustomAttribute {
+  key: string;
+  value: string | null;
+}
+
 export interface Customer {
   id: string;
   legacyResourceId?: string | null;
@@ -45,6 +54,8 @@ export interface Customer {
   note: string | null;
   taxExempt?: boolean | null;
   defaultAddress: Address | null;
+  /** Optionales Metafeld mit der USt-IdNr., Schluessel ist konfigurierbar. */
+  metafield?: Metafield | null;
 }
 
 export interface OrderLineItem {
@@ -87,6 +98,14 @@ export interface Order {
   customer: Customer | null;
   billingAddress: Address | null;
   shippingAddress: Address | null;
+  /** Zusatzfelder aus dem Checkout, oft Traeger der USt-IdNr. */
+  customAttributes?: CustomAttribute[] | null;
+  /** Optionales Metafeld mit der USt-IdNr. */
+  metafield?: Metafield | null;
+  /** Bei Shopify B2B das einkaufende Unternehmen. */
+  purchasingEntity?: {
+    company?: { id: string; name: string | null; externalId: string | null } | null;
+  } | null;
   totalPriceSet: MoneySet;
   subtotalPriceSet: MoneySet | null;
   totalTaxSet: MoneySet | null;

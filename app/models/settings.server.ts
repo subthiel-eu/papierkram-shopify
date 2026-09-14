@@ -94,6 +94,13 @@ export function toMappingSettings(settings: ShopSettings): MappingSettings {
   return {
     documentCurrency: settings.documentCurrency,
     allowForeignCurrency: settings.allowForeignCurrency,
+    homeCountry: settings.homeCountry,
+    taxScheme: settings.taxScheme,
+    reverseChargeEnabled: settings.reverseChargeEnabled,
+    reverseChargeNote: settings.reverseChargeNote,
+    kleinunternehmerNote: settings.kleinunternehmerNote,
+    vatIdSource: settings.vatIdSource,
+    vatIdKey: settings.vatIdKey,
     grossMode,
     defaultVatRate: settings.defaultVatRate,
     includeShipping: settings.includeShipping,

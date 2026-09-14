@@ -35,7 +35,7 @@ const TAX_LINE_FIELDS = `
 `;
 
 export const ORDER_QUERY = `#graphql
-  query PapierkramOrder($id: ID!) {
+  query PapierkramOrder($id: ID!, $vatNamespace: String!, $vatKey: String!) {
     order(id: $id) {
       id
       legacyResourceId
@@ -50,9 +50,19 @@ export const ORDER_QUERY = `#graphql
       taxExempt
       displayFinancialStatus
       cancelledAt
-      customer { ${CUSTOMER_FIELDS} }
+      customer {
+        ${CUSTOMER_FIELDS}
+        metafield(namespace: $vatNamespace, key: $vatKey) { value }
+      }
       billingAddress { ${ADDRESS_FIELDS} }
       shippingAddress { ${ADDRESS_FIELDS} }
+      customAttributes { key value }
+      metafield(namespace: $vatNamespace, key: $vatKey) { value }
+      purchasingEntity {
+        ... on PurchasingCompany {
+          company { id name externalId }
+        }
+      }
       totalPriceSet { shopMoney { amount currencyCode } }
       subtotalPriceSet { shopMoney { amount currencyCode } }
       totalTaxSet { shopMoney { amount currencyCode } }
@@ -190,6 +200,59 @@ export const PRODUCT_VARIANTS_QUERY = `#graphql
         price
         product { id title }
       }
+    }
+  }
+`;
+
+export const ORDERS_COUNT_QUERY = `#graphql
+  query PapierkramOrdersCount($query: String) {
+    ordersCount(query: $query, limit: 10000) {
+      count
+      precision
+    }
+  }
+`;
+
+/**
+ * Die Massenabfrage liefert nur die Kennungen; die vollstaendigen Daten holt
+ * sich jeder Job spaeter selbst. Das haelt die JSONL-Datei klein und die
+ * Abfragekosten niedrig.
+ */
+export const BULK_ORDERS_QUERY = `#graphql
+  mutation PapierkramBulkOrders($query: String!) {
+    bulkOperationRunQuery(query: $query) {
+      bulkOperation { id status }
+      userErrors { field message }
+    }
+  }
+`;
+
+export const BULK_OPERATION_QUERY = `#graphql
+  query PapierkramBulkOperation($id: ID!) {
+    node(id: $id) {
+      ... on BulkOperation {
+        id
+        status
+        errorCode
+        objectCount
+        url
+      }
+    }
+  }
+`;
+
+export const ORDER_TAGS_ADD_MUTATION = `#graphql
+  mutation PapierkramTagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      userErrors { field message }
+    }
+  }
+`;
+
+export const ORDER_TAGS_REMOVE_MUTATION = `#graphql
+  mutation PapierkramTagsRemove($id: ID!, $tags: [String!]!) {
+    tagsRemove(id: $id, tags: $tags) {
+      userErrors { field message }
     }
   }
 `;

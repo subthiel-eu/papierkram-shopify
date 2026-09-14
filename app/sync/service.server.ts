@@ -19,17 +19,25 @@ import {
 } from "~/models/settings.server";
 import type { PapierkramClient } from "~/papierkram/client.server";
 import { PapierkramApiError } from "~/papierkram/errors";
-import type { DeliveryInput, Estimate, Invoice } from "~/papierkram/types";
+import type {
+  DeliveryInput,
+  Estimate,
+  Invoice,
+  LineItemInput,
+} from "~/papierkram/types";
 
 import type { DocumentMode } from "./business-cases";
 
 import { runGraphql, type AdminGraphqlClient } from "./admin-client";
 import {
+  estimateDocumentTotals,
   mapCustomerToCompany,
   mapDraftOrderToEstimate,
   mapOrderToInvoice,
 } from "./mapper";
 import { metafieldsFingerprint, setMetafields } from "./metafields.server";
+import { taxCaseLabel } from "./tax-cases";
+import { renderEmail } from "./templates";
 import { CUSTOMER_QUERY, DRAFT_ORDER_QUERY, ORDER_QUERY } from "./queries";
 import type { Address, Customer, DraftOrder, Order } from "./shopify-types";
 
@@ -38,6 +46,19 @@ export interface SyncContext {
   admin: AdminGraphqlClient;
   settings: ShopSettings;
   client: PapierkramClient;
+}
+
+/**
+ * Zerlegt den konfigurierten Schluessel in Namespace und Key.
+ * "custom.vat_id" -> {namespace: "custom", key: "vat_id"}; ohne Punkt gilt
+ * "custom" als Namespace, weil Shopify das fuer eigene Felder vorsieht.
+ */
+export function vatMetafieldVariables(vatIdKey: string) {
+  const raw = (vatIdKey || "vat_id").trim();
+  const [namespace, key] = raw.includes(".")
+    ? [raw.slice(0, raw.indexOf(".")), raw.slice(raw.indexOf(".") + 1)]
+    : ["custom", raw];
+  return { vatNamespace: namespace || "custom", vatKey: key || "vat_id" };
 }
 
 /** Baut den Kontext (Einstellungen + Papierkram-Client) fuer einen Shop. */
@@ -185,6 +206,206 @@ async function writeCustomerMetafields(
   }
 }
 
+// ---------------------------------------------------------------- Vorschau
+
+export interface PreviewLine {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  /** Steuersatz in Prozent, wie ihn ein Mensch liest. */
+  vatPercent: number;
+  unitPrice: number;
+  discountPerUnit: number;
+  lineTotal: number;
+}
+
+export interface DocumentPreview {
+  kind: "invoice" | "estimate";
+  name: string;
+  documentDate: string | null;
+  /** true = Positionen sind Bruttopreise. */
+  gross: boolean;
+  currency: string;
+  lineItems: PreviewLine[];
+  totals: { net: number; vat: number; gross: number };
+  /** Summe laut Shopify, zum Abgleich. */
+  shopifyTotal: number;
+  difference: number;
+  warnings: string[];
+  billingCompany: string | null;
+  /** Ermittelter Steuerfall, im Klartext. */
+  taxCase: string;
+  /** Pflichthinweis, der auf den Beleg wandert. */
+  taxNote: string | null;
+  /** Uebernommene USt-IdNr. des Empfaengers. */
+  vatId: string | null;
+  /** Fehlt etwas, das die Erstellung verhindern wuerde? */
+  blockers: string[];
+}
+
+/**
+ * Rechnet die Abbildung durch, ohne etwas zu senden.
+ *
+ * Der heikelste Teil der App ist die Abbildung von Steuern, Rabatten und
+ * Rundung. Wer sie erst am fertigen Beleg in Papierkram sieht, kann nur noch
+ * stornieren. Die Vorschau kostet ausserdem kein Papierkram-Kontingent, weil
+ * sie ausschliesslich Shopify-Daten und den reinen Mapper benutzt.
+ */
+export async function previewInvoiceForOrder(
+  context: SyncContext,
+  orderGid: string,
+): Promise<DocumentPreview> {
+  const data = await runGraphql<{ order: Order | null }>(context.admin, ORDER_QUERY, {
+    id: orderGid,
+    ...vatMetafieldVariables(context.settings.vatIdKey),
+  });
+  const order = data.order;
+  if (!order) throw new Error(`Bestellung ${orderGid} wurde in Shopify nicht gefunden.`);
+
+  const { invoice, warnings, taxCase } = mapOrderToInvoice({
+    order,
+    settings: toMappingSettings(context.settings),
+    shopDomain: context.shop,
+    // Bewusst ohne Kontakt: die Vorschau darf in Papierkram nichts anlegen.
+    customerId: null,
+    propositions: await propositionMap(context.shop),
+  });
+
+  const blockers: string[] = [];
+  if (!context.settings.paymentTermId) {
+    blockers.push(
+      "Es ist keine Zahlungsbedingung ausgewaehlt. Papierkram lehnt die Rechnung sonst ab.",
+    );
+  }
+  if (invoice.line_items.length === 0) {
+    blockers.push("Die Bestellung enthaelt keine berechenbaren Positionen.");
+  }
+
+  return buildPreview({
+    kind: "invoice",
+    name: invoice.name,
+    documentDate: invoice.document_date ?? null,
+    gross: invoice.gross === true,
+    currency: context.settings.documentCurrency,
+    lineItems: invoice.line_items,
+    billingCompany: invoice.billing?.company ?? null,
+    taxCase: taxCaseLabel(taxCase.taxCase),
+    taxNote: taxCase.note || null,
+    vatId: taxCase.vatId,
+    shopifyTotal: money(Number(order.totalPriceSet.shopMoney.amount)),
+    warnings,
+    blockers,
+  });
+}
+
+/** Gegenstueck fuer Bestellentwuerfe. */
+export async function previewEstimateForDraftOrder(
+  context: SyncContext,
+  draftOrderGid: string,
+): Promise<DocumentPreview> {
+  const data = await runGraphql<{ draftOrder: DraftOrder | null }>(
+    context.admin,
+    DRAFT_ORDER_QUERY,
+    { id: draftOrderGid },
+  );
+  const draftOrder = data.draftOrder;
+  if (!draftOrder) {
+    throw new Error(`Bestellentwurf ${draftOrderGid} wurde in Shopify nicht gefunden.`);
+  }
+
+  const { estimate, warnings } = mapDraftOrderToEstimate({
+    draftOrder,
+    settings: toMappingSettings(context.settings),
+    shopDomain: context.shop,
+    customerId: null,
+    propositions: await propositionMap(context.shop),
+  });
+
+  return buildPreview({
+    kind: "estimate",
+    name: estimate.name,
+    documentDate: estimate.document_date ?? null,
+    gross: estimate.gross === true,
+    currency: context.settings.documentCurrency,
+    lineItems: estimate.line_items,
+    billingCompany: estimate.billing?.company ?? null,
+    taxCase: taxCaseLabel(
+      context.settings.taxScheme === "kleinunternehmer" ? "kleinunternehmer" : "standard",
+    ),
+    taxNote:
+      context.settings.taxScheme === "kleinunternehmer"
+        ? context.settings.kleinunternehmerNote
+        : null,
+    vatId: null,
+    shopifyTotal: money(Number(draftOrder.totalPriceSet.shopMoney.amount)),
+    warnings,
+    blockers: estimate.line_items.length === 0 ? ["Der Entwurf enthaelt keine Positionen."] : [],
+  });
+}
+
+function buildPreview(args: {
+  kind: "invoice" | "estimate";
+  name: string;
+  documentDate: string | null;
+  gross: boolean;
+  currency: string;
+  lineItems: LineItemInput[];
+  billingCompany: string | null;
+  taxCase: string;
+  taxNote: string | null;
+  vatId: string | null;
+  shopifyTotal: number;
+  warnings: string[];
+  blockers: string[];
+}): DocumentPreview {
+  const totals = estimateDocumentTotals(args.lineItems, args.gross);
+  const difference = money(totals.gross - args.shopifyTotal);
+
+  const lineItems: PreviewLine[] = args.lineItems.map((item) => {
+    const unitPrice = (args.gross ? item.price_gross : item.price) ?? 0;
+    const discount =
+      (args.gross ? item.discount_calculated_gross : item.discount_calculated) ?? 0;
+    const rate = typeof item.vat_rate === "number" ? item.vat_rate : 0;
+
+    return {
+      name: item.name,
+      description: item.description ?? null,
+      quantity: item.quantity,
+      unit: item.unit,
+      vatPercent: Math.round(rate * 10000) / 100,
+      unitPrice,
+      discountPerUnit: discount,
+      lineTotal: money((unitPrice - discount) * item.quantity),
+    };
+  });
+
+  const warnings = [...args.warnings];
+  if (Math.abs(difference) > 0.02) {
+    warnings.push(
+      `Die errechnete Belegsumme weicht um ${difference.toFixed(2)} ${args.currency} von der Shopify-Summe ab.`,
+    );
+  }
+
+  return {
+    kind: args.kind,
+    name: args.name,
+    documentDate: args.documentDate,
+    gross: args.gross,
+    currency: args.currency,
+    lineItems,
+    totals,
+    shopifyTotal: args.shopifyTotal,
+    difference,
+    warnings,
+    billingCompany: args.billingCompany,
+    taxCase: args.taxCase,
+    taxNote: args.taxNote,
+    vatId: args.vatId,
+    blockers: args.blockers,
+  };
+}
+
 // -------------------------------------------------------------- Rechnungen
 
 export interface CreateInvoiceOptions {
@@ -231,11 +452,10 @@ export async function createInvoiceForOrder(
     };
   }
 
-  const data = await runGraphql<{ order: Order | null }>(
-    context.admin,
-    ORDER_QUERY,
-    { id: orderGid },
-  );
+  const data = await runGraphql<{ order: Order | null }>(context.admin, ORDER_QUERY, {
+    id: orderGid,
+    ...vatMetafieldVariables(context.settings.vatIdKey),
+  });
   const order = data.order;
   if (!order) {
     throw new Error(`Bestellung ${orderGid} wurde in Shopify nicht gefunden.`);
@@ -253,7 +473,7 @@ export async function createInvoiceForOrder(
     order.billingAddress ?? order.shippingAddress,
   );
 
-  const { invoice: payload, warnings } = mapOrderToInvoice({
+  const { invoice: payload, warnings, taxCase } = mapOrderToInvoice({
     order,
     settings: toMappingSettings(context.settings),
     shopDomain: context.shop,
@@ -302,6 +522,16 @@ export async function createInvoiceForOrder(
       ? resolveAutomaticDelivery(options.mode ?? context.settings.invoiceMode, {
           recipient: order.email ?? order.customer?.email ?? null,
           documentNo: invoice.invoice_no,
+          template: {
+            subject: context.settings.invoiceEmailSubject,
+            body: context.settings.invoiceEmailBody,
+          },
+          templateContext: {
+            kunde: invoice.billing?.company ?? order.customer?.displayName ?? "",
+            summe: invoice.total_gross.toFixed(2),
+            shop: context.shop,
+            bestellung: order.name,
+          },
           onFallback: (reason) => warnings.push(reason),
         })
       : null);
@@ -315,8 +545,8 @@ export async function createInvoiceForOrder(
   await logInfo(
     context.shop,
     "invoice.create",
-    `Rechnung ${invoice.invoice_no ?? `#${invoice.id}`} fuer Bestellung ${order.name} angelegt.`,
-    { warnings },
+    `Rechnung ${invoice.invoice_no ?? `#${invoice.id}`} fuer Bestellung ${order.name} angelegt (${taxCaseLabel(taxCase.taxCase)}).`,
+    { warnings, taxCase: taxCase.taxCase, vatId: taxCase.vatId },
   );
   for (const warning of warnings) {
     await logWarning(context.shop, "invoice.create", warning, { order: order.name });
@@ -460,6 +690,16 @@ export async function createEstimateForDraftOrder(
           recipient: draftOrder.email ?? draftOrder.customer?.email ?? null,
           documentNo: estimate.estimate_no,
           documentLabel: "Angebot",
+          template: {
+            subject: context.settings.estimateEmailSubject,
+            body: context.settings.estimateEmailBody,
+          },
+          templateContext: {
+            kunde: estimate.billing?.company ?? draftOrder.customer?.displayName ?? "",
+            summe: estimate.total_gross.toFixed(2),
+            shop: context.shop,
+            bestellung: draftOrder.name,
+          },
           onFallback: (reason) => warnings.push(reason),
         })
       : null);
@@ -540,6 +780,10 @@ export function resolveAutomaticDelivery(
     documentNo: string | null;
     /** "Rechnung" (Standard) oder "Angebot" - steuert Betreff und Text. */
     documentLabel?: "Rechnung" | "Angebot";
+    /** Vorlage aus den Einstellungen. */
+    template?: { subject: string; body: string };
+    /** Zusaetzliche Platzhalterwerte. */
+    templateContext?: Record<string, string | number | null | undefined>;
     onFallback?: (reason: string) => void;
   },
 ): DeliveryInput | null {
@@ -554,23 +798,17 @@ export function resolveAutomaticDelivery(
       );
       return { send_via: "pdf" };
     }
-    return {
-      send_via: "email",
-      email: {
-        recipient,
-        subject:
-          label === "Angebot"
-            ? `Ihr Angebot ${context.documentNo ?? ""}`.trim()
-            : `Ihre Rechnung ${context.documentNo ?? ""}`.trim(),
-        body:
-          label === "Angebot"
-            ? "Guten Tag,\n\nim Anhang finden Sie unser Angebot. " +
-              "Bei Rueckfragen melden Sie sich gerne.\n\nMit freundlichen Gruessen"
-            : "Guten Tag,\n\nim Anhang finden Sie Ihre Rechnung. " +
-              "Bitte beachten Sie die Zahlungsmodalitaeten im Dokument.\n\n" +
-              "Vielen Dank fuer Ihren Auftrag!",
-      },
+    const template = context.template ?? {
+      subject: label === "Angebot" ? "Ihr Angebot {{beleg_nr}}" : "Ihre Rechnung {{beleg_nr}}",
+      body: "Guten Tag,\n\nim Anhang finden Sie Ihren Beleg {{beleg_nr}}.",
     };
+
+    const email = renderEmail(template, {
+      beleg_nr: context.documentNo ?? "",
+      ...context.templateContext,
+    });
+
+    return { send_via: "email", email: { recipient, ...email } };
   }
 
   // "draft" (Standard) und alles Unbekannte: nichts weiter tun.

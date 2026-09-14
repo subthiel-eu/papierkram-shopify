@@ -6,6 +6,7 @@ import { logError } from "~/models/log.server";
 import { PapierkramNotConfiguredError } from "~/papierkram/errors";
 import type { DeliveryInput } from "~/papierkram/types";
 import { authenticate } from "~/shopify.server";
+import { queueInvoices } from "~/sync/bulk.server";
 import {
   buildContext,
   cancelDocument,
@@ -18,6 +19,7 @@ import {
 } from "~/sync/service.server";
 
 type ActionName =
+  | "queue_invoices"
   | "create_invoice"
   | "create_estimate"
   | "deliver"
@@ -29,6 +31,8 @@ interface RequestBody {
   action: ActionName;
   /** GID der Bestellung, des Entwurfs oder des Kunden. */
   id?: string;
+  /** GIDs fuer Sammelaktionen. */
+  ids?: string[];
   force?: boolean;
   kind?: "invoice" | "estimate";
   papierkramId?: number;
@@ -55,6 +59,15 @@ export async function action({ request }: ActionFunctionArgs) {
     const context = await buildContext(session.shop, admin);
 
     switch (body.action) {
+      case "queue_invoices": {
+        const ids = (body.ids ?? []).filter((id) => id.includes("/Order/"));
+        if (ids.length === 0) {
+          return json({ ok: false, error: "Keine Bestellungen uebergeben." }, { status: 400 });
+        }
+        const bulk = await queueInvoices(session.shop, ids);
+        return json({ ok: true, bulk });
+      }
+
       case "create_invoice": {
         requireId(body.id, "Bestellung");
         const result = await createInvoiceForOrder(context, body.id!, {

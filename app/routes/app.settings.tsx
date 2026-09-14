@@ -166,6 +166,25 @@ export async function action({ request }: ActionFunctionArgs) {
       documentNameTemplate:
         text(form, "documentNameTemplate") ?? "Shopify Bestellung {{order_name}}",
       writeMetafields: checkbox(form, "writeMetafields"),
+      invoiceEmailSubject:
+        text(form, "invoiceEmailSubject") ?? "Ihre Rechnung {{beleg_nr}}",
+      invoiceEmailBody: text(form, "invoiceEmailBody") ?? "",
+      estimateEmailSubject:
+        text(form, "estimateEmailSubject") ?? "Ihr Angebot {{beleg_nr}}",
+      estimateEmailBody: text(form, "estimateEmailBody") ?? "",
+      skipTag: text(form, "skipTag") ?? "",
+      forceTag: text(form, "forceTag") ?? "",
+      homeCountry: (text(form, "homeCountry") ?? "DE").toUpperCase(),
+      taxScheme: String(form.get("taxScheme") ?? "standard"),
+      reverseChargeEnabled: checkbox(form, "reverseChargeEnabled"),
+      reverseChargeNote: text(form, "reverseChargeNote") ?? "",
+      kleinunternehmerNote: text(form, "kleinunternehmerNote") ?? "",
+      vatIdSource: String(form.get("vatIdSource") ?? "auto"),
+      vatIdKey: text(form, "vatIdKey") ?? "vat_id",
+      reconcileEnabled: checkbox(form, "reconcileEnabled"),
+      reconcileIntervalHours: Math.max(1, numberOr(form, "reconcileIntervalHours", 6)),
+      paidTag: text(form, "paidTag") ?? "",
+      overdueTag: text(form, "overdueTag") ?? "",
     });
 
     return json({ ok: true, message: "Einstellungen gespeichert." });
@@ -408,6 +427,141 @@ export default function Settings() {
                 </s-option>
               ))}
             </s-select>
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Steuerfaelle">
+          <s-paragraph>
+            Ein Beleg mit 0 % ohne den vorgeschriebenen Hinweis ist rechnerisch
+            richtig und als Rechnung trotzdem unvollstaendig. Ob der Hinweis auf
+            dem PDF erscheint, haengt allerdings von deiner Papierkram-Vorlage
+            ab - die API kennt nur das Feld &quot;Notizen&quot;.
+          </s-paragraph>
+          <s-stack direction="block" gap="base">
+            <s-text-field
+              label="Sitzland (ISO-Code)"
+              name="homeCountry"
+              value={settings.homeCountry}
+              placeholder="DE"
+              details="Entscheidet, was Inland, EU-Ausland und Drittland ist."
+            />
+            <s-select label="Besteuerung" name="taxScheme" value={settings.taxScheme}>
+              <s-option value="standard">Regelbesteuerung</s-option>
+              <s-option value="kleinunternehmer">Kleinunternehmer (§ 19 UStG)</s-option>
+            </s-select>
+            <s-text-area
+              label="Hinweis bei Kleinunternehmerregelung"
+              name="kleinunternehmerNote"
+              value={settings.kleinunternehmerNote}
+              rows={2}
+            />
+            <s-checkbox
+              label="Reverse Charge fuer EU-B2B mit USt-IdNr."
+              name="reverseChargeEnabled"
+              checked={settings.reverseChargeEnabled}
+              details="Greift nur, wenn eine USt-IdNr. gefunden wird und das Zielland ein anderes EU-Land ist."
+            />
+            <s-text-area
+              label="Hinweis bei Reverse Charge"
+              name="reverseChargeNote"
+              value={settings.reverseChargeNote}
+              rows={2}
+            />
+            <s-select label="Woher kommt die USt-IdNr.?" name="vatIdSource" value={settings.vatIdSource}>
+              <s-option value="auto">Automatisch suchen (empfohlen)</s-option>
+              <s-option value="order_attribute">Bestellattribut aus dem Checkout</s-option>
+              <s-option value="order_metafield">Metafeld an der Bestellung</s-option>
+              <s-option value="customer_metafield">Metafeld am Kunden</s-option>
+              <s-option value="none">Nicht uebernehmen</s-option>
+            </s-select>
+            <s-text-field
+              label="Schluessel der USt-IdNr."
+              name="vatIdKey"
+              value={settings.vatIdKey}
+              placeholder="custom.vat_id"
+              details="Als namespace.key fuer Metafelder, oder nur der Name fuer Bestellattribute."
+            />
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Versandtexte">
+          <s-paragraph>
+            Platzhalter: <code>{"{{beleg_nr}}"}</code>, <code>{"{{kunde}}"}</code>,{" "}
+            <code>{"{{summe}}"}</code>, <code>{"{{bestellung}}"}</code>,{" "}
+            <code>{"{{shop}}"}</code>
+          </s-paragraph>
+          <s-stack direction="block" gap="base">
+            <s-text-field
+              label="Betreff der Rechnungs-E-Mail"
+              name="invoiceEmailSubject"
+              value={settings.invoiceEmailSubject}
+            />
+            <s-text-area
+              label="Text der Rechnungs-E-Mail"
+              name="invoiceEmailBody"
+              value={settings.invoiceEmailBody}
+              rows={5}
+            />
+            <s-text-field
+              label="Betreff der Angebots-E-Mail"
+              name="estimateEmailSubject"
+              value={settings.estimateEmailSubject}
+            />
+            <s-text-area
+              label="Text der Angebots-E-Mail"
+              name="estimateEmailBody"
+              value={settings.estimateEmailBody}
+              rows={5}
+            />
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Steuerung ueber Tags">
+          <s-stack direction="block" gap="base">
+            <s-text-field
+              label="Tag zum Ueberspringen"
+              name="skipTag"
+              value={settings.skipTag}
+              details="Bestellungen mit diesem Tag werden nie uebertragen - etwa Testbestellungen."
+            />
+            <s-text-field
+              label="Tag zum Erzwingen"
+              name="forceTag"
+              value={settings.forceTag}
+              details="Loest die Rechnung aus, auch wenn kein Ausloeser dafuer geschaltet ist."
+            />
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Statusabgleich">
+          <s-paragraph>
+            Papierkram bietet keine Webhooks, deshalb fragt die App in festen
+            Abstaenden nach. Der Abgleich laeuft nur in eine Richtung: Papierkram
+            ist die Quelle, Shopify bekommt Tags. Umgekehrt geht es nicht, weil
+            die API keine Rechnung als bezahlt markieren kann.
+          </s-paragraph>
+          <s-stack direction="block" gap="base">
+            <s-checkbox
+              label="Belegstatus regelmaessig abgleichen"
+              name="reconcileEnabled"
+              checked={settings.reconcileEnabled}
+            />
+            <s-number-field
+              label="Abstand in Stunden"
+              name="reconcileIntervalHours"
+              value={String(settings.reconcileIntervalHours)}
+              details="Der Abgleich liest die Belegliste seitenweise, nicht Beleg fuer Beleg - er kostet also wenige Credits."
+            />
+            <s-text-field
+              label="Tag bei bezahlter Rechnung"
+              name="paidTag"
+              value={settings.paidTag}
+            />
+            <s-text-field
+              label="Tag bei ueberfaelliger Rechnung"
+              name="overdueTag"
+              value={settings.overdueTag}
+            />
           </s-stack>
         </s-section>
 

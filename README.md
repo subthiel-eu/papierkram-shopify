@@ -18,7 +18,13 @@ Belegstatus direkt in der Bestellung und beim Kunden sichtbar ist.
 | **Actions** | Modale Dialoge „Rechnung erstellen“ / „Angebot erstellen“ mit Auswahl: Entwurf lassen, festschreiben oder per E-Mail senden. |
 | **Metafelder** | Belegnummer, Status, Betrag und Link landen als Metafelder an Bestellung, Entwurf und Kunde – nutzbar in Shopify Flow, Liquid und Exporten. |
 | **Positionen** | Optionale Zuordnung Shopify-Variante → Papierkram-Position, damit Belege die Artikelnummern aus Papierkram tragen. |
-| **Betrieb** | Konfigurierbare Webhook-Regeln je Geschäftsfall, Warteschlange mit automatischen Wiederholungen, Protokoll und Statusabgleich. |
+| **Vorschau** | Rechnet die Abbildung durch, ohne etwas zu senden: Positionen, Steuersätze, Rabatte, Summen und der Abgleich gegen Shopify — bevor ein Beleg entsteht. |
+| **Steuerfälle** | Reverse Charge für EU-B2B mit USt-IdNr., Ausfuhrlieferung, Kleinunternehmerregelung — jeweils mit Pflichthinweis und übernommener USt-IdNr. |
+| **Nachtragen** | Historische Bestellungen über eine Shopify-Massenabfrage, mit Umfangs- und Kontingentschätzung vorweg. |
+| **Sammelaktion** | Mehrere Bestellungen in der Übersicht markieren und Rechnungen einplanen. |
+| **Shopify Flow** | Aktion „Papierkram Rechnung erstellen", damit Bedingungen im Workflow statt in einer Auswahlliste entstehen. |
+| **Statusabgleich** | Holt den Belegstatus aus Papierkram und setzt Tags an der Bestellung (bezahlt, überfällig). |
+| **Betrieb** | Konfigurierbare Webhook-Regeln je Geschäftsfall, Warteschlange mit automatischen Wiederholungen, Protokoll, Tag-Steuerung. |
 
 ## Voraussetzungen
 
@@ -142,6 +148,52 @@ Buchhaltung verzeiht keine Rundungsfehler, deshalb hier die Regeln im Klartext:
 * **Versand und Trinkgeld** werden als eigene Positionen geführt (abschaltbar).
 * **Kontrolle.** Nach dem Anlegen vergleicht die App die Papierkram-Summe mit der
   Shopify-Summe und protokolliert Abweichungen über 2 Cent.
+
+## Steuerfälle
+
+Ein Beleg mit 0 % ohne den vorgeschriebenen Hinweis ist rechnerisch richtig und
+als Rechnung trotzdem unvollständig. Die App ermittelt deshalb immer beides:
+
+| Fall | Bedingung | Folge |
+| --- | --- | --- |
+| Kleinunternehmer | in den Einstellungen gewählt | 0 % auf allen Positionen, § 19 UStG-Hinweis. Schlägt alle anderen Fälle. |
+| Reverse Charge | anderes EU-Land **und** gefundene USt-IdNr. | 0 %, Pflichthinweis, USt-IdNr. auf dem Beleg |
+| Ausfuhrlieferung | Drittland und Shopify weist keine Steuer aus | 0 %, Hinweis |
+| Regelbesteuerung | sonst | Steuersätze aus den Shopify-Steuerzeilen |
+
+Ohne USt-IdNr. bleibt eine EU-Lieferung bewusst steuerpflichtig — das ist der
+Versandhandelsfall, nicht der Reverse-Charge-Fall.
+
+**Woher die USt-IdNr. kommt.** Shopify legt sie je nach Aufbau unterschiedlich
+ab. Die Voreinstellung sucht der Reihe nach im Bestellattribut aus dem Checkout,
+im Metafeld der Bestellung, im Metafeld des Kunden und schließlich bei Shopify
+B2B am Unternehmen. Quelle und Schlüssel lassen sich festlegen.
+
+Geprüft wird nur die Form: bekanntes Länderpräfix (inklusive `EL` für
+Griechenland und `XI` für Nordirland) plus mindestens eine Ziffer. Eine
+VIES-Abfrage gehört in den Bestellprozess, nicht in die Belegerzeugung.
+
+**Eine Einschränkung.** Die Papierkram-API kennt bei Rechnungen als Freitext nur
+das Feld „Notizen". Dort landet der Pflichthinweis. Ob er auf dem PDF erscheint,
+hängt von deiner Papierkram-Vorlage ab — die USt-IdNr. dagegen steht in der
+Rechnungsanschrift und erscheint immer.
+
+## Bestellungen nachtragen
+
+Nach der Installation fehlen die zurückliegenden Monate. Unter *Nachtragen*
+wählst du einen Zeitraum, lässt den Umfang schätzen und bestätigst dann:
+
+1. `ordersCount` liefert die Zahl der Bestellungen und daraus eine grobe
+   Credit-Schätzung. Reicht das Kontingent voraussichtlich nicht, steht das
+   deutlich da, bevor irgendetwas läuft.
+2. `bulkOperationRunQuery` holt die Kennungen der Bestellungen.
+3. Der Webhook `bulk_operations/finish` meldet das Ergebnis; die JSONL-Datei
+   wird zeilenweise gelesen, damit auch zehntausend Bestellungen nicht den
+   Speicher sprengen.
+4. Die Bestellungen gehen versetzt in die Warteschlange, damit ein Nachtrag
+   nicht die laufende Tagesarbeit verdrängt.
+
+Bestellungen mit vorhandenem Beleg werden übersprungen.
 
 ## Was die App im Betrieb abfängt
 
