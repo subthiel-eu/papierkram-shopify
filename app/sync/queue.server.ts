@@ -117,7 +117,11 @@ async function runJob(job: SyncJob) {
 
     switch (job.type as JobType) {
       case "order_invoice":
-        await createInvoiceForOrder(context, payload.orderGid, { force: payload.force });
+        await createInvoiceForOrder(context, payload.orderGid, {
+          force: payload.force,
+          // Automatisch erzeugte Rechnungen folgen der Einstellung invoiceMode.
+          deliverFromSettings: true,
+        });
         break;
       case "draft_order_estimate":
         await createEstimateForDraftOrder(context, payload.draftOrderGid, {

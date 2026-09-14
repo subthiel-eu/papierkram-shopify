@@ -226,6 +226,17 @@ export default function Settings() {
             </s-select>
 
             <s-select
+              label="Was soll mit automatisch erzeugten Rechnungen passieren?"
+              name="invoiceMode"
+              value={settings.invoiceMode}
+              details="Gilt nur fuer den automatischen Ablauf. Beim manuellen Anlegen waehlst du es jedes Mal im Dialog."
+            >
+              <s-option value="draft">Als Entwurf in Papierkram liegen lassen</s-option>
+              <s-option value="pdf">Festschreiben (Belegnummer wird vergeben)</s-option>
+              <s-option value="email">Festschreiben und an den Kunden senden</s-option>
+            </s-select>
+
+            <s-select
               label="Zahlungsbedingung"
               name="paymentTermId"
               value={settings.paymentTermId ? String(settings.paymentTermId) : ""}

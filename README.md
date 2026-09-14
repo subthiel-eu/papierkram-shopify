@@ -11,7 +11,7 @@ Belegstatus direkt in der Bestellung und beim Kunden sichtbar ist.
 
 | Bereich | Funktion |
 | --- | --- |
-| **Rechnungen** | Aus jeder Bestellung – manuell oder automatisch bei Eingang, Zahlung oder Versand. Festschreiben und Versand per E-Mail direkt aus Shopify. |
+| **Rechnungen** | Auslöser frei wählbar: nur manuell (Standard), bei Bestelleingang, bei Zahlung oder bei Versand. Danach wahlweise Entwurf, festschreiben oder an den Kunden senden. |
 | **Angebote** | Aus Shopify-Bestellentwürfen, manuell oder automatisch. |
 | **Kontakte** | Shopify-Kunden werden als Papierkram-Unternehmen angelegt. Vor der Neuanlage wird per E-Mail nach einem bestehenden Kontakt gesucht, damit keine Dubletten entstehen. |
 | **Blocks** | Eigene Abschnitte auf der Bestell-, Entwurfs- und Kundenseite im Shopify-Admin mit Belegnummer, Status, Betrag, Direktlink und Aktionen. |
@@ -62,6 +62,31 @@ API-Token eintragen → **Verbindung testen**.
 | `PAPIERKRAM_BASE_URL_TEMPLATE` | Optional, Standard `https://{subdomain}.papierkram.de`. |
 | `SYNC_WORKER_INTERVAL` | Optional, Sekunden zwischen zwei Worker-Läufen (Standard 15). |
 | `SYNC_WORKER_DISABLED` | Auf `true` setzen, wenn der Worker in einem separaten Prozess läuft. |
+
+## Wann entsteht eine Rechnung?
+
+**Standardmäßig gar nicht automatisch.** Der Auslöser steht ab Werk auf
+*„Nur manuell"* – es passiert erst etwas, wenn du im Block oder im Dialog auf
+„Rechnung erstellen" klickst. Umstellen unter *Einstellungen → Rechnungen*:
+
+| Einstellung | Shopify-Webhook | Wann |
+| --- | --- | --- |
+| Nur manuell | – | Standard. Nichts läuft von allein. |
+| Bei neuer Bestellung | `orders/create` | Sobald die Bestellung eingeht, unabhängig von der Zahlung. |
+| Wenn bezahlt | `orders/paid` | Sobald Shopify die Zahlung als vollständig meldet. |
+| Wenn versendet | `orders/fulfilled` | Sobald die Bestellung **vollständig** versendet ist. Teillieferungen lösen nicht aus. |
+
+Dazu kommt eine zweite, unabhängige Einstellung: **was danach passiert** –
+als Entwurf liegen lassen, festschreiben (Belegnummer wird vergeben) oder
+festschreiben **und** an den Kunden senden. Hat die Bestellung keine
+E-Mail-Adresse, wird nur festgeschrieben und der Grund protokolliert, statt den
+Beleg stillschweigend zu verlieren.
+
+Es entsteht **pro Bestellung höchstens eine Rechnung**: Vor dem Einplanen wird
+auf eine bestehende Verknüpfung geprüft, und der Job trägt einen Schlüssel je
+Bestellung. `orders/paid` nach `orders/create` erzeugt also keinen zweiten
+Beleg. Ein zweiter Beleg entsteht nur, wenn du ihn im Dialog ausdrücklich
+anforderst – dort steht dann auch eine Warnung.
 
 ## Wie die Beträge abgebildet werden
 

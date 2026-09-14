@@ -43,7 +43,7 @@ model ShopSettings {
   remainingQuota   Int?
 
   // --- Belegerzeugung ---
-  /// none | draft | deliver  -> was beim Ausloeser passiert
+  /// draft | pdf | email -> was mit automatisch erzeugten Rechnungen passiert
   invoiceMode      String  @default("draft")
   /// Ausloeser fuer die Rechnung: manual | order_create | order_paid | order_fulfilled
   invoiceTrigger   String  @default("manual")

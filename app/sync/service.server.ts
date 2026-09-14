@@ -186,6 +186,12 @@ export interface CreateInvoiceOptions {
   force?: boolean;
   /** Nach dem Anlegen finalisieren (festschreiben oder per Mail senden). */
   deliver?: DeliveryInput | null;
+  /**
+   * Statt eines festen Werts die Einstellung invoiceMode anwenden. Wird vom
+   * automatischen Ablauf genutzt, der die Empfaengeradresse erst kennt,
+   * nachdem die Bestellung geladen wurde.
+   */
+  deliverFromSettings?: boolean;
 }
 
 export interface CreateInvoiceResult {
@@ -260,8 +266,18 @@ export async function createInvoiceForOrder(
     );
   }
 
-  if (options.deliver) {
-    invoice = await deliverDocument(context, "invoice", invoice.id, options.deliver) as Invoice;
+  const delivery =
+    options.deliver ??
+    (options.deliverFromSettings
+      ? resolveAutomaticDelivery(context.settings.invoiceMode, {
+          recipient: order.email ?? order.customer?.email ?? null,
+          documentNo: invoice.invoice_no,
+          onFallback: (reason) => warnings.push(reason),
+        })
+      : null);
+
+  if (delivery) {
+    invoice = (await deliverDocument(context, "invoice", invoice.id, delivery)) as Invoice;
   }
 
   await persistInvoiceLink(context, orderGid, invoice, order.name);
@@ -433,6 +449,47 @@ async function persistEstimateLink(
       error,
     );
   }
+}
+
+/**
+ * Uebersetzt die Einstellung invoiceMode in eine Zustellung.
+ *
+ * "email" ohne Empfaengeradresse wuerde die Rechnung verlieren, deshalb wird
+ * in dem Fall nur festgeschrieben und der Grund vermerkt.
+ */
+export function resolveAutomaticDelivery(
+  invoiceMode: string,
+  context: {
+    recipient: string | null;
+    documentNo: string | null;
+    onFallback?: (reason: string) => void;
+  },
+): DeliveryInput | null {
+  if (invoiceMode === "pdf") return { send_via: "pdf" };
+
+  if (invoiceMode === "email") {
+    const recipient = context.recipient?.trim();
+    if (!recipient) {
+      context.onFallback?.(
+        "Die Bestellung hat keine E-Mail-Adresse. Die Rechnung wurde nur festgeschrieben, nicht versendet.",
+      );
+      return { send_via: "pdf" };
+    }
+    return {
+      send_via: "email",
+      email: {
+        recipient,
+        subject: `Ihre Rechnung ${context.documentNo ?? ""}`.trim(),
+        body:
+          "Guten Tag,\n\nim Anhang finden Sie Ihre Rechnung. " +
+          "Bitte beachten Sie die Zahlungsmodalitaeten im Dokument.\n\n" +
+          "Vielen Dank fuer Ihren Auftrag!",
+      },
+    };
+  }
+
+  // "draft" (Standard) und alles Unbekannte: nichts weiter tun.
+  return null;
 }
 
 // ------------------------------------------------------- Belegoperationen
