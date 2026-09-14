@@ -10,6 +10,8 @@ import {
 } from "~/papierkram/errors";
 import { unauthenticated } from "~/shopify.server";
 
+import type { DocumentMode } from "./business-cases";
+
 import {
   buildContext,
   createEstimateForDraftOrder,
@@ -26,8 +28,8 @@ export type JobType =
   | "refresh_document";
 
 export interface JobPayloads {
-  order_invoice: { orderGid: string; force?: boolean };
-  draft_order_estimate: { draftOrderGid: string; force?: boolean };
+  order_invoice: { orderGid: string; force?: boolean; mode?: DocumentMode };
+  draft_order_estimate: { draftOrderGid: string; force?: boolean; mode?: DocumentMode };
   customer_upsert: { customerGid: string };
   refresh_document: { kind: "invoice" | "estimate"; shopifyGid: string };
 }
@@ -119,13 +121,17 @@ async function runJob(job: SyncJob) {
       case "order_invoice":
         await createInvoiceForOrder(context, payload.orderGid, {
           force: payload.force,
-          // Automatisch erzeugte Rechnungen folgen der Einstellung invoiceMode.
+          // Automatisch erzeugte Belege folgen der ausloesenden Regel bzw.
+          // der Voreinstellung des Shops.
           deliverFromSettings: true,
+          mode: payload.mode,
         });
         break;
       case "draft_order_estimate":
         await createEstimateForDraftOrder(context, payload.draftOrderGid, {
           force: payload.force,
+          deliverFromSettings: true,
+          mode: payload.mode,
         });
         break;
       case "customer_upsert":

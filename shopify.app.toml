@@ -19,7 +19,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2025-07"
+api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
@@ -29,21 +29,25 @@ api_version = "2025-07"
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  # Alle fachlichen Topics laufen auf eine Route. Welches Topic welchen
+  # Geschaeftsfall ausloest, stellt jeder Shop selbst ein - siehe
+  # app/sync/business-cases.ts und Einstellungen -> Geschaeftsfaelle.
   [[webhooks.subscriptions]]
-  topics = [ "orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/fulfilled" ]
-  uri = "/webhooks/orders"
-
-  [[webhooks.subscriptions]]
-  topics = [ "draft_orders/create", "draft_orders/update" ]
-  uri = "/webhooks/draft-orders"
-
-  [[webhooks.subscriptions]]
-  topics = [ "customers/create", "customers/update" ]
-  uri = "/webhooks/customers"
-
-  [[webhooks.subscriptions]]
-  topics = [ "refunds/create" ]
-  uri = "/webhooks/refunds"
+  topics = [
+    "orders/create",
+    "orders/updated",
+    "orders/paid",
+    "orders/cancelled",
+    "orders/fulfilled",
+    "orders/partially_fulfilled",
+    "fulfillments/create",
+    "draft_orders/create",
+    "draft_orders/update",
+    "customers/create",
+    "customers/update",
+    "refunds/create"
+  ]
+  uri = "/webhooks/business"
 
   [[webhooks.subscriptions]]
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]

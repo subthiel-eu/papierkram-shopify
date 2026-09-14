@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 
 import { linksForShopifyObject } from "~/models/links.server";
+import { getRules, summarizeTriggers } from "~/models/rules.server";
 import { getSettings, hasCredentials, readApiToken } from "~/models/settings.server";
 import { authenticate } from "~/shopify.server";
 
@@ -18,13 +19,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shopifyGid = url.searchParams.get("id");
 
   const settings = await getSettings(session.shop);
+  const rules = await getRules(session.shop);
   const configured = hasCredentials(settings) && readApiToken(settings) !== null;
 
   const base = {
     configured,
     subdomain: settings.subdomain,
-    invoiceTrigger: settings.invoiceTrigger,
-    estimateFromDraftOrders: settings.estimateFromDraftOrders,
+    /** Aktive Ausloeser als Shopify-Topics, leer = nur manuell. */
+    invoiceTriggers: summarizeTriggers(rules, "invoice_create"),
+    estimateTriggers: summarizeTriggers(rules, "estimate_create"),
     /** Ohne Zahlungsbedingung lehnt Papierkram jede Rechnung ab. */
     paymentTermConfigured: settings.paymentTermId !== null,
     appUrl: process.env.SHOPIFY_APP_URL ?? null,

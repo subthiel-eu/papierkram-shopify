@@ -4,6 +4,7 @@ import { Link, useLoaderData } from "@remix-run/react";
 
 import prisma from "~/db.server";
 import { listLinks } from "~/models/links.server";
+import { getRules, summarizeTriggers } from "~/models/rules.server";
 import { recentLogs } from "~/models/log.server";
 import {
   buildClient,
@@ -39,6 +40,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
   }
 
+  const rules = await getRules(shop);
+
   const [documents, logs, jobs, invoiceCount, estimateCount, contactCount] =
     await Promise.all([
       listLinks(shop, { limit: 8 }),
@@ -54,9 +57,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     connection,
     subdomain: settings.subdomain,
     remainingQuota: settings.remainingQuota,
-    invoiceTrigger: settings.invoiceTrigger,
     paymentTermId: settings.paymentTermId,
-    estimateFromDraftOrders: settings.estimateFromDraftOrders,
+    invoiceTriggers: summarizeTriggers(rules, "invoice_create"),
+    estimateTriggers: summarizeTriggers(rules, "estimate_create"),
     counts: { invoiceCount, estimateCount, contactCount },
     jobs,
     documents: documents.items.map((link) => ({
@@ -78,12 +81,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 }
 
-const TRIGGER_LABELS: Record<string, string> = {
-  manual: "Nur manuell",
-  order_create: "Bei neuer Bestellung",
-  order_paid: "Wenn bezahlt",
-  order_fulfilled: "Wenn versendet",
-};
+/** Leere Ausloeserliste heisst: der Fall laeuft nur auf Knopfdruck. */
+function describeTriggers(topics: string[]): string {
+  return topics.length === 0 ? "nur manuell" : topics.join(", ");
+}
 
 export default function Dashboard() {
   const data = useLoaderData<typeof loader>();
@@ -151,10 +152,10 @@ export default function Dashboard() {
             </s-text>
           ) : null}
           <s-text tone="neutral">
-            Rechnungen: {TRIGGER_LABELS[data.invoiceTrigger] ?? data.invoiceTrigger}
-            {" | "}
-            Angebote aus Entwuerfen:{" "}
-            {data.estimateFromDraftOrders ? "automatisch" : "manuell"}
+            Rechnungen: {describeTriggers(data.invoiceTriggers)}
+          </s-text>
+          <s-text tone="neutral">
+            Angebote: {describeTriggers(data.estimateTriggers)}
           </s-text>
           {data.remainingQuota !== null ? (
             <s-text tone={data.remainingQuota < 500 ? "critical" : "neutral"}>

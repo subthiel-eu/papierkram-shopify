@@ -11,14 +11,14 @@ Belegstatus direkt in der Bestellung und beim Kunden sichtbar ist.
 
 | Bereich | Funktion |
 | --- | --- |
-| **Rechnungen** | Auslöser frei wählbar: nur manuell (Standard), bei Bestelleingang, bei Zahlung oder bei Versand. Danach wahlweise Entwurf, festschreiben oder an den Kunden senden. |
-| **Angebote** | Aus Shopify-Bestellentwürfen, manuell oder automatisch. |
+| **Rechnungen** | Auslöser frei konfigurierbar (Bestelleingang, Zahlung, Versand, Teillieferung …), je Auslöser mit eigener Verzögerung und Nachbehandlung. |
+| **Angebote** | Aus Shopify-Bestellentwürfen, manuell oder über frei konfigurierbare Auslöser. |
 | **Kontakte** | Shopify-Kunden werden als Papierkram-Unternehmen angelegt. Vor der Neuanlage wird per E-Mail nach einem bestehenden Kontakt gesucht, damit keine Dubletten entstehen. |
 | **Blocks** | Eigene Abschnitte auf der Bestell-, Entwurfs- und Kundenseite im Shopify-Admin mit Belegnummer, Status, Betrag, Direktlink und Aktionen. |
 | **Actions** | Modale Dialoge „Rechnung erstellen“ / „Angebot erstellen“ mit Auswahl: Entwurf lassen, festschreiben oder per E-Mail senden. |
 | **Metafelder** | Belegnummer, Status, Betrag und Link landen als Metafelder an Bestellung, Entwurf und Kunde – nutzbar in Shopify Flow, Liquid und Exporten. |
 | **Positionen** | Optionale Zuordnung Shopify-Variante → Papierkram-Position, damit Belege die Artikelnummern aus Papierkram tragen. |
-| **Betrieb** | Warteschlange mit automatischen Wiederholungen, Protokoll und Statusabgleich in der App-Oberfläche. |
+| **Betrieb** | Konfigurierbare Webhook-Regeln je Geschäftsfall, Warteschlange mit automatischen Wiederholungen, Protokoll und Statusabgleich. |
 
 ## Voraussetzungen
 
@@ -63,30 +63,56 @@ API-Token eintragen → **Verbindung testen**.
 | `SYNC_WORKER_INTERVAL` | Optional, Sekunden zwischen zwei Worker-Läufen (Standard 15). |
 | `SYNC_WORKER_DISABLED` | Auf `true` setzen, wenn der Worker in einem separaten Prozess läuft. |
 
-## Wann entsteht eine Rechnung?
+## Geschäftsfälle und Auslöser
 
-**Standardmäßig gar nicht automatisch.** Der Auslöser steht ab Werk auf
-*„Nur manuell"* – es passiert erst etwas, wenn du im Block oder im Dialog auf
-„Rechnung erstellen" klickst. Umstellen unter *Einstellungen → Rechnungen*:
+Welcher Shopify-Webhook welchen Vorgang auslöst, ist **pro Geschäftsfall
+einstellbar** – unter *Einstellungen → Geschäftsfälle*. Ein Fall darf mehrere
+Auslöser haben, ein Auslöser mehrere Fälle bedienen.
 
-| Einstellung | Shopify-Webhook | Wann |
+| Geschäftsfall | Mögliche Auslöser | Nachbehandlung |
 | --- | --- | --- |
-| Nur manuell | – | Standard. Nichts läuft von allein. |
-| Bei neuer Bestellung | `orders/create` | Sobald die Bestellung eingeht, unabhängig von der Zahlung. |
-| Wenn bezahlt | `orders/paid` | Sobald Shopify die Zahlung als vollständig meldet. |
-| Wenn versendet | `orders/fulfilled` | Sobald die Bestellung **vollständig** versendet ist. Teillieferungen lösen nicht aus. |
+| Rechnung aus Bestellung | `orders/create`, `orders/paid`, `orders/fulfilled`, `orders/partially_fulfilled`, `fulfillments/create` | ja |
+| Angebot aus Bestellentwurf | `draft_orders/create`, `draft_orders/update` | ja |
+| Kontakt abgleichen | `customers/create`, `customers/update` | – |
+| Belegstatus aus Papierkram holen | `orders/updated`, `orders/paid`, `orders/cancelled`, `refunds/create` | – |
+| Hinweis bei Erstattung | `refunds/create` | – |
+| Hinweis bei Stornierung | `orders/cancelled` | – |
 
-Dazu kommt eine zweite, unabhängige Einstellung: **was danach passiert** –
-als Entwurf liegen lassen, festschreiben (Belegnummer wird vergeben) oder
-festschreiben **und** an den Kunden senden. Hat die Bestellung keine
-E-Mail-Adresse, wird nur festgeschrieben und der Grund protokolliert, statt den
-Beleg stillschweigend zu verlieren.
+Je Auslöser lassen sich zusätzlich einstellen:
 
-Es entsteht **pro Bestellung höchstens eine Rechnung**: Vor dem Einplanen wird
-auf eine bestehende Verknüpfung geprüft, und der Job trägt einen Schlüssel je
-Bestellung. `orders/paid` nach `orders/create` erzeugt also keinen zweiten
-Beleg. Ein zweiter Beleg entsteht nur, wenn du ihn im Dialog ausdrücklich
-anforderst – dort steht dann auch eine Warnung.
+* **Verzögerung** in Sekunden – nützlich bei Entwürfen, die im Admin erst noch
+  zusammengeklickt werden.
+* **Nachbehandlung** (nur bei Belegfällen): als Entwurf lassen, festschreiben
+  oder festschreiben und an den Kunden senden. Leer bedeutet: die
+  Voreinstellung des Shops. So kann `orders/create` einen Entwurf anlegen und
+  `orders/paid` denselben Beleg-Typ direkt verschicken.
+
+**Ab Werk ist nichts scharf, was Belege erzeugt.** Voreingestellt sind nur die
+lesenden bzw. hinweisenden Fälle: Statusabgleich bei Änderung, Stornierung und
+Erstattung sowie die beiden Hinweise. Rechnungen und Angebote entstehen also
+erst, wenn du einen Auslöser aktivierst – oder auf Knopfdruck im Block bzw. im
+Dialog.
+
+### Schutz gegen doppelte Belege
+
+Pro Bestellung entsteht höchstens eine Rechnung, pro Entwurf höchstens ein
+Angebot – unabhängig davon, wie viele Auslöser aktiv sind:
+
+1. Vor dem Einplanen wird geprüft, ob bereits eine Verknüpfung existiert.
+2. Der Job trägt einen Schlüssel je Objekt (`invoice:<gid>`), ein noch offener
+   Job deckt weitere Auslöser mit ab.
+
+`fulfillments/create` darf deshalb auch bei Teillieferungen mehrfach feuern.
+Ein zweiter Beleg entsteht nur, wenn du ihn im Dialog ausdrücklich anforderst –
+dort steht dann auch eine Warnung.
+
+### Warum die Topics trotzdem fest abonniert sind
+
+Shopify deklariert Webhook-Abos in `shopify.app.toml` app-weit, nicht pro Shop.
+Die App abonniert deshalb alle Topics des Katalogs und entscheidet beim
+Eintreffen anhand der Regeltabelle des Shops, was zu tun ist. Alle fachlichen
+Topics laufen dafür auf eine Route (`/webhooks/business`). Ein Topic ohne
+aktive Regel wird quittiert und verworfen – ohne API-Aufruf bei Papierkram.
 
 ## Wie die Beträge abgebildet werden
 
@@ -119,12 +145,14 @@ Buchhaltung verzeiht keine Rundungsfehler, deshalb hier die Regeln im Klartext:
 ```
 app/
   papierkram/      Typisierter Client für die Papierkram API v1 (+ Fehlertypen)
-  sync/            Mapping, Warteschlange, Worker, Webhooks-Logik, Metafelder
+  sync/            Katalog der Geschäftsfälle, Dispatcher, Mapping,
+                   Warteschlange, Worker, Metafelder
   models/          Einstellungen, Verknüpfungen, Protokoll (Prisma)
   routes/          Admin-Oberfläche, Webhooks, API für die Extensions
 extensions/        Fünf Admin-UI-Extensions (Preact + Polaris Web Components)
 prisma/            Datenmodell und Migrationen
-tests/             Vitest: Mapping, Client, Verschlüsselung, Rundung
+tests/             Vitest: Mapping, Client, Regeln/Dispatcher (echtes
+                   SQLite), Verschlüsselung, Rundung
 ```
 
 **Warum eine Warteschlange?** Shopify erwartet auf Webhooks binnen fünf Sekunden
@@ -184,7 +212,8 @@ Diese Grenzen liegen an der Papierkram-API, nicht an der App:
   Suche läuft also höchstens einmal je Kunde.
 * **Bestellung storniert.** Die App storniert die Rechnung nicht automatisch –
   eine festgeschriebene Rechnung ohne Rückfrage zu stornieren wäre ein zu
-  weitreichender Eingriff. Es gibt einen Protokolleintrag.
+  weitreichender Eingriff. Der Geschäftsfall *Hinweis bei Stornierung*
+  protokolliert sie stattdessen mit Belegverweis.
 
 ## Entwicklung
 

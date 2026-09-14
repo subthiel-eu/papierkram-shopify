@@ -19,8 +19,9 @@ export interface PapierkramDocument {
 export interface PapierkramContext {
   configured: boolean;
   subdomain: string | null;
-  invoiceTrigger: string;
-  estimateFromDraftOrders: boolean;
+  /** Aktive Ausloeser als Shopify-Topics; leer bedeutet: nur manuell. */
+  invoiceTriggers: string[];
+  estimateTriggers: string[];
   paymentTermConfigured: boolean;
   documents: PapierkramDocument[];
   customerLink: {

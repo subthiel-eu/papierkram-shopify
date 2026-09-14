@@ -43,12 +43,9 @@ model ShopSettings {
   remainingQuota   Int?
 
   // --- Belegerzeugung ---
-  /// draft | pdf | email -> was mit automatisch erzeugten Rechnungen passiert
+  /// Voreinstellung, was mit automatisch erzeugten Belegen passiert:
+  /// draft | pdf | email. Einzelne Webhook-Regeln koennen das ueberschreiben.
   invoiceMode      String  @default("draft")
-  /// Ausloeser fuer die Rechnung: manual | order_create | order_paid | order_fulfilled
-  invoiceTrigger   String  @default("manual")
-  /// Angebot automatisch aus Shopify-Entwuerfen erzeugen?
-  estimateFromDraftOrders Boolean @default(false)
   /// Papierkram Zahlungsbedingung (Pflichtfeld beim Anlegen einer Rechnung).
   paymentTermId    Int?
   /// Optionales Rechnungs-Template.
@@ -89,6 +86,33 @@ model ShopSettings {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// Welcher Shopify-Webhook loest welchen Geschaeftsfall aus.
+/// Der Katalog der gueltigen Kombinationen steht in app/sync/business-cases.ts.
+model WebhookRule {
+  id   String @id @default(cuid())
+  shop String
+
+  /// invoice_create | estimate_create | customer_sync | document_refresh |
+  /// refund_notice | cancel_notice
+  businessCase String
+  /// Shopify-Topic, z.B. "orders/paid".
+  topic        String
+
+  enabled      Boolean @default(false)
+  /// Verzoegerung, bevor der Job laeuft. Nuetzlich bei Entwuerfen, die im
+  /// Admin noch zusammengeklickt werden.
+  delaySeconds Int     @default(0)
+  /// Ueberschreibt ShopSettings.invoiceMode fuer genau diesen Ausloeser.
+  /// null = Voreinstellung des Shops verwenden.
+  mode         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, businessCase, topic])
+  @@index([shop, topic, enabled])
 }
 
 /// Verknuepfung zwischen einem Shopify-Objekt und einem Papierkram-Beleg/Kontakt.

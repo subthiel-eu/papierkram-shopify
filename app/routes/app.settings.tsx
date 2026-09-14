@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 
+import { getRules, saveRules, type RuleUpdate } from "~/models/rules.server";
 import {
   buildClient,
   getSettings,
@@ -11,6 +12,7 @@ import {
 } from "~/models/settings.server";
 import type { PaymentTerm, Project } from "~/papierkram/types";
 import { authenticate } from "~/shopify.server";
+import { BUSINESS_CASES } from "~/sync/business-cases";
 import { ensureMetafieldDefinitions } from "~/sync/metafields.server";
 import { describeError } from "~/sync/service.server";
 
@@ -22,6 +24,7 @@ interface Choice {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const settings = await getSettings(session.shop);
+  const rules = await getRules(session.shop);
 
   let paymentTerms: Choice[] = [];
   let projects: Choice[] = [];
@@ -57,6 +60,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   return json({
+    businessCases: BUSINESS_CASES,
+    rules: rules.map((rule) => ({
+      businessCase: rule.businessCase,
+      topic: rule.topic,
+      enabled: rule.enabled,
+      delaySeconds: rule.delaySeconds,
+      mode: rule.mode,
+    })),
     settings: {
       ...settings,
       createdAt: settings.createdAt.toISOString(),
@@ -104,6 +115,31 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   }
 
+  if (intent === "rules") {
+    try {
+      const updates: RuleUpdate[] = [];
+      // Jede Regel schickt ein verstecktes Feld rule:<fall>:<topic> mit,
+      // damit auch abgewaehlte Kaestchen erkannt werden - HTML sendet
+      // unmarkierte Checkboxen nicht mit.
+      for (const key of form.keys()) {
+        if (!key.startsWith("rule:")) continue;
+        const [, businessCase, topic] = key.split(":");
+        if (!businessCase || !topic) continue;
+        updates.push({
+          businessCase,
+          topic,
+          enabled: form.get(`enabled:${businessCase}:${topic}`) !== null,
+          delaySeconds: Number(form.get(`delay:${businessCase}:${topic}`) ?? 0),
+          mode: modeOrNull(form.get(`mode:${businessCase}:${topic}`)),
+        });
+      }
+      const count = await saveRules(shop, updates);
+      return json({ ok: true, message: `${count} Ausloeser gespeichert.` });
+    } catch (error) {
+      return json({ ok: false, message: describeError(error) }, { status: 400 });
+    }
+  }
+
   try {
     const token = String(form.get("apiToken") ?? "").trim();
     if (token) await setApiToken(shop, token);
@@ -111,9 +147,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     await updateSettings(shop, {
       subdomain: text(form, "subdomain"),
-      invoiceTrigger: String(form.get("invoiceTrigger") ?? "manual"),
       invoiceMode: String(form.get("invoiceMode") ?? "draft"),
-      estimateFromDraftOrders: checkbox(form, "estimateFromDraftOrders"),
       paymentTermId: numberOrNull(form, "paymentTermId"),
       invoiceTemplateId: numberOrNull(form, "invoiceTemplateId"),
       estimateTemplateId: numberOrNull(form, "estimateTemplateId"),
@@ -136,6 +170,11 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (error) {
     return json({ ok: false, message: describeError(error) }, { status: 400 });
   }
+}
+
+function modeOrNull(value: FormDataEntryValue | null): "draft" | "pdf" | "email" | null {
+  const mode = String(value ?? "");
+  return mode === "draft" || mode === "pdf" || mode === "email" ? mode : null;
 }
 
 function text(form: FormData, key: string): string | null {
@@ -215,21 +254,10 @@ export default function Settings() {
         <s-section heading="Rechnungen">
           <s-stack direction="block" gap="base">
             <s-select
-              label="Wann soll eine Rechnung entstehen?"
-              name="invoiceTrigger"
-              value={settings.invoiceTrigger}
-            >
-              <s-option value="manual">Nur manuell aus der Bestellung heraus</s-option>
-              <s-option value="order_create">Sobald die Bestellung eingeht</s-option>
-              <s-option value="order_paid">Sobald die Bestellung bezahlt ist</s-option>
-              <s-option value="order_fulfilled">Sobald die Bestellung versendet ist</s-option>
-            </s-select>
-
-            <s-select
-              label="Was soll mit automatisch erzeugten Rechnungen passieren?"
+              label="Voreinstellung fuer automatisch erzeugte Belege"
               name="invoiceMode"
               value={settings.invoiceMode}
-              details="Gilt nur fuer den automatischen Ablauf. Beim manuellen Anlegen waehlst du es jedes Mal im Dialog."
+              details="Gilt fuer den automatischen Ablauf. Einzelne Ausloeser unter Geschaeftsfaelle koennen davon abweichen; beim manuellen Anlegen waehlst du jedes Mal im Dialog."
             >
               <s-option value="draft">Als Entwurf in Papierkram liegen lassen</s-option>
               <s-option value="pdf">Festschreiben (Belegnummer wird vergeben)</s-option>
@@ -274,12 +302,6 @@ export default function Settings() {
 
         <s-section heading="Angebote">
           <s-stack direction="block" gap="base">
-            <s-checkbox
-              label="Aus Shopify-Bestellentwuerfen automatisch Angebote erzeugen"
-              name="estimateFromDraftOrders"
-              checked={settings.estimateFromDraftOrders}
-              details="Unabhaengig davon kannst du Angebote jederzeit manuell aus einem Entwurf erzeugen."
-            />
             <s-select
               label="Angebotsvorlage"
               name="estimateTemplateId"
@@ -391,6 +413,78 @@ export default function Settings() {
         </s-section>
       </Form>
 
+      <s-section heading="Geschaeftsfaelle und Ausloeser">
+        <s-paragraph>
+          Hier legst du fest, welcher Shopify-Webhook welchen Vorgang ausloest.
+          Ein Geschaeftsfall darf mehrere Ausloeser haben; doppelte Belege
+          entstehen dadurch nicht, weil pro Bestellung bzw. Entwurf nur ein
+          Beleg angelegt wird.
+        </s-paragraph>
+
+        <Form method="post">
+          <input type="hidden" name="intent" value="rules" />
+          <s-stack direction="block" gap="large">
+            {data.businessCases.map((businessCase) => (
+              <s-box
+                key={businessCase.key}
+                padding="base"
+                background="subdued"
+                borderRadius="base"
+              >
+                <s-stack direction="block" gap="base">
+                  <s-stack direction="block" gap="small-500">
+                    <s-heading>{businessCase.label}</s-heading>
+                    <s-text tone="neutral">{businessCase.description}</s-text>
+                  </s-stack>
+
+                  {businessCase.topics.map((topic) => {
+                    const rule = ruleFor(data.rules, businessCase.key, topic.topic);
+                    const id = `${businessCase.key}:${topic.topic}`;
+                    return (
+                      <s-box key={id} paddingInlineStart="base">
+                        <s-stack direction="block" gap="small-500">
+                          {/* Merker, damit auch abgewaehlte Kaestchen ankommen. */}
+                          <input type="hidden" name={`rule:${id}`} value="1" />
+                          <s-checkbox
+                            label={topic.label}
+                            name={`enabled:${id}`}
+                            checked={rule.enabled}
+                            details={`${topic.topic}${topic.hint ? ` - ${topic.hint}` : ""}`}
+                          />
+                          <s-stack direction="inline" gap="base" alignItems="end">
+                            <s-number-field
+                              label="Verzoegerung (Sekunden)"
+                              name={`delay:${id}`}
+                              value={String(rule.delaySeconds)}
+                            />
+                            {businessCase.supportsMode ? (
+                              <s-select
+                                label="Nachbehandlung"
+                                name={`mode:${id}`}
+                                value={rule.mode ?? ""}
+                              >
+                                <s-option value="">Voreinstellung des Shops</s-option>
+                                <s-option value="draft">Als Entwurf lassen</s-option>
+                                <s-option value="pdf">Festschreiben</s-option>
+                                <s-option value="email">Festschreiben und senden</s-option>
+                              </s-select>
+                            ) : null}
+                          </s-stack>
+                        </s-stack>
+                      </s-box>
+                    );
+                  })}
+                </s-stack>
+              </s-box>
+            ))}
+
+            <s-button type="submit" variant="primary" loading={busy}>
+              Ausloeser speichern
+            </s-button>
+          </s-stack>
+        </Form>
+      </s-section>
+
       <s-section heading="Werkzeuge">
         <s-stack direction="inline" gap="base">
           {/* Eigene Formulare: <s-button> kennt kein name/value, mit dem sich
@@ -410,5 +504,26 @@ export default function Settings() {
         </s-stack>
       </s-section>
     </s-page>
+  );
+}
+
+interface RuleView {
+  businessCase: string;
+  topic: string;
+  enabled: boolean;
+  delaySeconds: number;
+  mode: string | null;
+}
+
+/** Die Regeln sind serverseitig vollstaendig; der Fallback ist reine Vorsicht. */
+function ruleFor(rules: RuleView[], businessCase: string, topic: string): RuleView {
+  return (
+    rules.find((rule) => rule.businessCase === businessCase && rule.topic === topic) ?? {
+      businessCase,
+      topic,
+      enabled: false,
+      delaySeconds: 0,
+      mode: null,
+    }
   );
 }

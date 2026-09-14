@@ -17,6 +17,8 @@ import type { PapierkramClient } from "~/papierkram/client.server";
 import { PapierkramApiError } from "~/papierkram/errors";
 import type { DeliveryInput, Estimate, Invoice } from "~/papierkram/types";
 
+import type { DocumentMode } from "./business-cases";
+
 import { runGraphql, type AdminGraphqlClient } from "./admin-client";
 import {
   mapCustomerToCompany,
@@ -192,6 +194,8 @@ export interface CreateInvoiceOptions {
    * nachdem die Bestellung geladen wurde.
    */
   deliverFromSettings?: boolean;
+  /** Ueberschreibt invoiceMode - kommt aus der ausloesenden Webhook-Regel. */
+  mode?: DocumentMode;
 }
 
 export interface CreateInvoiceResult {
@@ -269,7 +273,7 @@ export async function createInvoiceForOrder(
   const delivery =
     options.deliver ??
     (options.deliverFromSettings
-      ? resolveAutomaticDelivery(context.settings.invoiceMode, {
+      ? resolveAutomaticDelivery(options.mode ?? context.settings.invoiceMode, {
           recipient: order.email ?? order.customer?.email ?? null,
           documentNo: invoice.invoice_no,
           onFallback: (reason) => warnings.push(reason),
@@ -351,7 +355,12 @@ export interface CreateEstimateResult {
 export async function createEstimateForDraftOrder(
   context: SyncContext,
   draftOrderGid: string,
-  options: { force?: boolean; deliver?: DeliveryInput | null } = {},
+  options: {
+    force?: boolean;
+    deliver?: DeliveryInput | null;
+    deliverFromSettings?: boolean;
+    mode?: DocumentMode;
+  } = {},
 ): Promise<CreateEstimateResult> {
   const existing = await findLink(context.shop, "estimate", draftOrderGid);
   if (existing && !options.force) {
@@ -391,13 +400,19 @@ export async function createEstimateForDraftOrder(
 
   let estimate = await context.client.createEstimate(payload);
 
-  if (options.deliver) {
-    estimate = (await deliverDocument(
-      context,
-      "estimate",
-      estimate.id,
-      options.deliver,
-    )) as Estimate;
+  const delivery =
+    options.deliver ??
+    (options.deliverFromSettings
+      ? resolveAutomaticDelivery(options.mode ?? context.settings.invoiceMode, {
+          recipient: draftOrder.email ?? draftOrder.customer?.email ?? null,
+          documentNo: estimate.estimate_no,
+          documentLabel: "Angebot",
+          onFallback: (reason) => warnings.push(reason),
+        })
+      : null);
+
+  if (delivery) {
+    estimate = (await deliverDocument(context, "estimate", estimate.id, delivery)) as Estimate;
   }
 
   await persistEstimateLink(context, draftOrderGid, estimate, draftOrder.name);
@@ -462,16 +477,19 @@ export function resolveAutomaticDelivery(
   context: {
     recipient: string | null;
     documentNo: string | null;
+    /** "Rechnung" (Standard) oder "Angebot" - steuert Betreff und Text. */
+    documentLabel?: "Rechnung" | "Angebot";
     onFallback?: (reason: string) => void;
   },
 ): DeliveryInput | null {
+  const label = context.documentLabel ?? "Rechnung";
   if (invoiceMode === "pdf") return { send_via: "pdf" };
 
   if (invoiceMode === "email") {
     const recipient = context.recipient?.trim();
     if (!recipient) {
       context.onFallback?.(
-        "Die Bestellung hat keine E-Mail-Adresse. Die Rechnung wurde nur festgeschrieben, nicht versendet.",
+        `Es ist keine E-Mail-Adresse hinterlegt. Das Dokument (${label}) wurde nur festgeschrieben, nicht versendet.`,
       );
       return { send_via: "pdf" };
     }
@@ -479,11 +497,17 @@ export function resolveAutomaticDelivery(
       send_via: "email",
       email: {
         recipient,
-        subject: `Ihre Rechnung ${context.documentNo ?? ""}`.trim(),
+        subject:
+          label === "Angebot"
+            ? `Ihr Angebot ${context.documentNo ?? ""}`.trim()
+            : `Ihre Rechnung ${context.documentNo ?? ""}`.trim(),
         body:
-          "Guten Tag,\n\nim Anhang finden Sie Ihre Rechnung. " +
-          "Bitte beachten Sie die Zahlungsmodalitaeten im Dokument.\n\n" +
-          "Vielen Dank fuer Ihren Auftrag!",
+          label === "Angebot"
+            ? "Guten Tag,\n\nim Anhang finden Sie unser Angebot. " +
+              "Bei Rueckfragen melden Sie sich gerne.\n\nMit freundlichen Gruessen"
+            : "Guten Tag,\n\nim Anhang finden Sie Ihre Rechnung. " +
+              "Bitte beachten Sie die Zahlungsmodalitaeten im Dokument.\n\n" +
+              "Vielen Dank fuer Ihren Auftrag!",
       },
     };
   }
