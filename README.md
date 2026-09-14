@@ -293,6 +293,8 @@ atomar, aber ein Worker je Instanz vervielfacht nur die Leerläufe.
 Jeder Push und Pull Request läuft durch `.github/workflows/ci.yml`: Typecheck
 für App und Extensions, Lint, Tests und Build.
 
+Geplante Erweiterungen stehen in [ROADMAP.md](ROADMAP.md).
+
 ### Was noch offen ist
 
 * **Ein Lauf gegen einen echten Shop und Papierkram-Mandanten.** Das ist der
