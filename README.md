@@ -215,6 +215,26 @@ Diese Grenzen liegen an der Papierkram-API, nicht an der App:
   weitreichender Eingriff. Der Geschäftsfall *Hinweis bei Stornierung*
   protokolliert sie stattdessen mit Belegverweis.
 
+## Abhängigkeiten und `npm audit`
+
+`npm audit` meldet Treffer, die sich derzeit nicht auflösen lassen. Der Stand,
+damit niemand raten muss:
+
+| Paket | Kommt von | Betrifft |
+| --- | --- | --- |
+| `tar`, `cacache`, `toml`, `remark-mdx-frontmatter` | `@remix-run/dev` | Nur den Build. Zur Laufzeit läuft der kompilierte Output unter `remix-serve`. |
+| `vite` | Build und Dev-Server | Die drei Advisories betreffen den **Dev-Server** (Path Traversal in `.map`, `server.fs.deny`-Bypass, Editor-Launch unter Windows). Behoben erst ab Vite 7; der Remix-Plugin akzeptiert `^5.1.0 \|\| ^6.0.0`. |
+| `prisma`, `@prisma/config`, `deepmerge-ts` | Prisma CLI | Nur Migrationen und Codegenerierung. `@prisma/client` zur Laufzeit ist nicht betroffen. |
+| `turbo-stream` | `@remix-run/server-runtime` | DoS über Single Fetch. Diese App aktiviert `v3_singleFetch` nicht, der betroffene Pfad wird also nicht benutzt. |
+
+Was sich beheben ließ, ist behoben: `@shopify/api-codegen-preset` war ungenutzt
+(die Shopify-Typen sind in `app/sync/shopify-types.ts` von Hand geschrieben)
+und ist entfernt – das räumt den kompletten `graphql-codegen`-Baum ab.
+Vitest ist auf 3.x angehoben.
+
+Keiner der verbleibenden Treffer liegt im Pfad der laufenden App. Sobald der
+Remix-Vite-Plugin Vite 7 unterstützt, löst sich der Vite-Block mit auf.
+
 ## Entwicklung
 
 ```bash
