@@ -30,7 +30,7 @@ Belegstatus direkt in der Bestellung und beim Kunden sichtbar ist.
 ## Einrichtung
 
 ```bash
-git clone https://github.com/Disane87/papierkram-shopify.git
+git clone https://github.com/subthiel-eu/papierkram-shopify.git
 cd papierkram-shopify
 npm install
 
