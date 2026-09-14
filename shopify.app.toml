@@ -1,0 +1,53 @@
+# Diese Datei wird von `shopify app config link` mit der eigenen App-ID ergaenzt.
+name = "Papierkram"
+handle = "papierkram"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
+
+[access_scopes]
+scopes = "read_orders,write_orders,read_draft_orders,write_draft_orders,read_customers,write_customers,read_products"
+
+[auth]
+redirect_urls = [
+  "https://example.com/auth/callback",
+  "https://example.com/auth/shopify/callback",
+  "https://example.com/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2025-07"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/fulfilled" ]
+  uri = "/webhooks/orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "draft_orders/create", "draft_orders/update" ]
+  uri = "/webhooks/draft-orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "customers/create", "customers/update" ]
+  uri = "/webhooks/customers"
+
+  [[webhooks.subscriptions]]
+  topics = [ "refunds/create" ]
+  uri = "/webhooks/refunds"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "/webhooks/compliance"
+
+[pos]
+embedded = false

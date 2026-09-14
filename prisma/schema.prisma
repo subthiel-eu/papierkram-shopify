@@ -1,0 +1,185 @@
+// Datenmodell der Papierkram <-> Shopify Integration.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Von @shopify/shopify-app-session-storage-prisma vorgegebenes Schema.
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+}
+
+/// Pro Shop genau ein Einstellungs-Datensatz.
+model ShopSettings {
+  id        String @id @default(cuid())
+  shop      String @unique
+
+  // --- Papierkram Zugang ---
+  /// Subdomain, z.B. "meinefirma" fuer https://meinefirma.papierkram.de
+  subdomain        String?
+  /// AES-256-GCM verschluesselter API-Token.
+  apiTokenCipher   String?
+  /// Zeitpunkt der letzten erfolgreichen Verbindungspruefung.
+  connectionOkAt   DateTime?
+  /// Letzter bekannter Stand des X-Remaining-Quota Headers.
+  remainingQuota   Int?
+
+  // --- Belegerzeugung ---
+  /// none | draft | deliver  -> was beim Ausloeser passiert
+  invoiceMode      String  @default("draft")
+  /// Ausloeser fuer die Rechnung: manual | order_create | order_paid | order_fulfilled
+  invoiceTrigger   String  @default("manual")
+  /// Angebot automatisch aus Shopify-Entwuerfen erzeugen?
+  estimateFromDraftOrders Boolean @default(false)
+  /// Papierkram Zahlungsbedingung (Pflichtfeld beim Anlegen einer Rechnung).
+  paymentTermId    Int?
+  /// Optionales Rechnungs-Template.
+  invoiceTemplateId  Int?
+  /// Optionales Angebots-Template.
+  estimateTemplateId Int?
+  /// Optionales Papierkram-Projekt, dem Belege zugeordnet werden.
+  projectId        Int?
+
+  // --- Betraege ---
+  /// Belege in Brutto (true) oder Netto (false) ausweisen.
+  /// "auto" uebernimmt die Einstellung des Shops (taxesIncluded).
+  grossMode        String  @default("auto")
+  /// Standard-USt-Satz, wenn Shopify keine Steuerzeile liefert.
+  defaultVatRate   Float   @default(19)
+  /// Versandkosten als eigene Position aufnehmen.
+  includeShipping  Boolean @default(true)
+  /// Bezeichnung der Versandposition.
+  shippingLabel    String  @default("Versandkosten")
+  /// Trinkgeld/Tip als eigene Position aufnehmen.
+  includeTips      Boolean @default(true)
+  /// Rabatte als Positionsrabatt uebernehmen.
+  applyDiscounts   Boolean @default(true)
+
+  // --- Kontakte ---
+  /// Shopify-Kunden als Papierkram-Unternehmen anlegen/aktualisieren.
+  syncCustomers    Boolean @default(true)
+  /// Bestehende Papierkram-Kontakte bei Aenderungen ueberschreiben.
+  updateCustomers  Boolean @default(false)
+  /// Kunden ohne Firmenname unter "Vorname Nachname" anlegen.
+  fallbackToPersonName Boolean @default(true)
+
+  // --- Sonstiges ---
+  /// Belegname, unterstuetzt {{order_name}}, {{order_number}}, {{shop}}, {{customer}}
+  documentNameTemplate String @default("Shopify Bestellung {{order_name}}")
+  /// Metafelder auf Bestellung/Kunde zurueckschreiben.
+  writeMetafields  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Verknuepfung zwischen einem Shopify-Objekt und einem Papierkram-Beleg/Kontakt.
+model DocumentLink {
+  id   String @id @default(cuid())
+  shop String
+
+  /// invoice | estimate | company
+  kind         String
+  /// GID des Shopify-Objekts, z.B. gid://shopify/Order/123
+  shopifyGid   String
+  /// Zusaetzliche, menschenlesbare Referenz (Bestellnummer, Kundenname).
+  shopifyLabel String?
+
+  papierkramId  Int
+  /// Belegnummer bzw. Kundennummer, sobald vergeben.
+  documentNo    String?
+  /// draft | open | paid | cancelled ... (Rohwert aus Papierkram)
+  state         String?
+  totalGross    Float?
+  currency      String?
+  /// Direktlink in die Papierkram-Oberflaeche.
+  url           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, kind, shopifyGid])
+  @@index([shop, kind])
+  @@index([shop, papierkramId])
+}
+
+/// Auftragswarteschlange: Webhooks quittieren sofort, die Arbeit passiert hier.
+model SyncJob {
+  id   String @id @default(cuid())
+  shop String
+
+  /// order_invoice | draft_order_estimate | customer_upsert | refresh_document
+  type    String
+  /// JSON-Payload des Jobs.
+  payload String
+  /// pending | running | done | failed
+  status  String @default("pending")
+
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  runAfter    DateTime  @default(now())
+  lastError   String?
+  /// Verhindert doppelte Jobs fuer dasselbe Objekt.
+  dedupeKey   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, dedupeKey])
+  @@index([status, runAfter])
+  @@index([shop, status])
+}
+
+/// Protokoll fuer die Admin-Oberflaeche.
+model LogEntry {
+  id   String @id @default(cuid())
+  shop String
+
+  /// info | warning | error
+  level   String
+  /// Kurzer Vorgang, z.B. "invoice.create"
+  action  String
+  message String
+  /// Optionales JSON mit Kontext.
+  context String?
+
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([shop, level])
+}
+
+/// Zuordnung Shopify-Produkt/Variante -> Papierkram Position (Proposition).
+model PropositionMapping {
+  id   String @id @default(cuid())
+  shop String
+
+  /// GID der Variante oder des Produkts.
+  shopifyGid    String
+  shopifyLabel  String?
+  propositionId Int
+  propositionNo String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, shopifyGid])
+}

@@ -1,0 +1,10 @@
+{
+  "name": "papierkram-estimate-action",
+  "private": true,
+  "version": "1.0.0",
+  "license": "MIT",
+  "dependencies": {
+    "@shopify/ui-extensions": "2026.7.4",
+    "preact": "^10.27.2"
+  }
+}

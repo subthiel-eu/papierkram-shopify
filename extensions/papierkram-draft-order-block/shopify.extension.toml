@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Bestellentwurf"
+handle = "papierkram-draft-order-block"
+description = "Erzeugt aus einem Bestellentwurf ein Papierkram-Angebot."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/DraftOrderBlock.tsx"
+  target = "admin.draft-order-details.block.render"

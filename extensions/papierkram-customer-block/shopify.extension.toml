@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Kunde"
+handle = "papierkram-customer-block"
+description = "Zeigt den verknuepften Papierkram-Kontakt und legt ihn bei Bedarf an."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/CustomerBlock.tsx"
+  target = "admin.customer-details.block.render"

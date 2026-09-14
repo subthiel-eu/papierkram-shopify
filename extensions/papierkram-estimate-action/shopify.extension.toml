@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Angebot erstellen"
+handle = "papierkram-estimate-action"
+description = "Legt aus einem Bestellentwurf ein Papierkram-Angebot an und versendet es auf Wunsch."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/EstimateAction.tsx"
+  target = "admin.draft-order-details.action.render"

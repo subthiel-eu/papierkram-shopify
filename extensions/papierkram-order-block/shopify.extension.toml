@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Bestellung"
+handle = "papierkram-order-block"
+description = "Zeigt Rechnungen und Angebote zur Bestellung und legt neue an."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/OrderBlock.tsx"
+  target = "admin.order-details.block.render"

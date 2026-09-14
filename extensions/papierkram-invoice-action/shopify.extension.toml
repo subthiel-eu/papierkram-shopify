@@ -1,0 +1,11 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Papierkram: Rechnung erstellen"
+handle = "papierkram-invoice-action"
+description = "Legt aus der Bestellung eine Papierkram-Rechnung an und versendet sie auf Wunsch."
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/InvoiceAction.tsx"
+  target = "admin.order-details.action.render"
